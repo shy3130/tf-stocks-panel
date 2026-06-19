@@ -2205,7 +2205,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tf-stocks-panel-backend"
+name = "tf-stock-panel-backend"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

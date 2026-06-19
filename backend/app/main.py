@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(
-        "TF-Stocks-Panel v%s starting (mode=%s)",
+        "TF-Stock-Panel v%s starting (mode=%s)",
         __version__, "free" if settings.use_free_mode else "api_key",
     )
 
@@ -133,7 +133,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="TF-Stocks-Panel",
+    title="TF-Stock-Panel",
     version=__version__,
     description="A 股选股 + 回测面板 — TickFlow 适配",
     lifespan=lifespan,
