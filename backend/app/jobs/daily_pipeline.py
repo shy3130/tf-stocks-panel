@@ -102,8 +102,8 @@ def run_now(
     emit("resolve_universe", 10, f"标的池规模:{len(universe)} 只")
 
     # Step 1: 日 K 同步
-    #   今天有数据 → 实时行情接口拉一次覆写（1请求全市场）
-    #   今天没数据 → batch K-line API 补齐
+    #   付费档 + 今天有数据 → 实时行情接口拉一次覆写（1请求全市场）
+    #   有历史数据 → batch K-line API 补齐缺口
     #   无任何数据 → batch K-line API 拉首次 1 年
     from datetime import date as _date, timedelta as _td, datetime as _dt
     latest_daily = repo.latest_daily_date()
@@ -111,18 +111,23 @@ def run_now(
     today_exists = latest_daily and latest_daily >= today
     new_daily_days = 0
 
-    if today_exists:
-        # 今天有数据（QuoteService 已落盘）→ 实时行情覆写，确保最新
+    if today_exists and capset.has(Cap.QUOTE_POOL):
+        # 付费档:今天有数据(QuoteService 已落盘)→ 实时行情覆写,确保最新。
+        # free/none 档无 quote.pool 能力,即便今天已有数据(如从 expert 降级),
+        # 也降级到下方 batch 路径刷新,避免调用无权限的实时行情接口。
         emit("sync_daily", 12, f"获取日K [{today} ~ {today}] 实时行情…")
         written_daily = kline_sync.sync_daily_by_quotes(repo)
         new_daily_days = 1
         emit("sync_daily", 45, f"日K 完成,{written_daily} 只标的")
         logger.info("sync_daily: [%s ~ %s] live quotes, %d symbols", today, today, written_daily)
     elif latest_daily:
-        # 有历史但今天没数据 → batch 补齐缺口
+        # 有历史 → batch 补齐缺口。
+        # 也覆盖"今天已有数据但无实时行情权限(free/none)"的降级场景:
+        #   此时 start_date = latest_daily = today,batch 刷新当天日K。
         start_date = latest_daily
         emit("sync_daily", 12, f"获取日K [{start_date} ~ {today}]…")
-        logger.info("sync_daily: [%s ~ %s] gap fill", start_date, today)
+        logger.info("sync_daily: [%s ~ %s] %s", start_date, today,
+                    "refresh today" if today_exists else "gap fill")
 
         def _daily_chunk_progress(cur: int, tot: int) -> None:
             emit("sync_daily", 12 + int(33 * cur / tot),
