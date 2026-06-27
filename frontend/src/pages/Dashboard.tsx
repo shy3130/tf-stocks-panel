@@ -1,8 +1,8 @@
-import { useState, type ReactNode } from 'react'
+import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { motion } from 'framer-motion'
-import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Check, Copy, Flame, Gauge, LineChart, Loader2, RefreshCw, Sparkles, Target, Timer, ExternalLink } from 'lucide-react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, Flame, Gauge, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
 import { api, type MarketSnapshotRow, type OverviewDimensionRankItem, type OverviewMarket, type AlertEvent } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -10,6 +10,8 @@ import { fmtBigNum, fmtPct } from '@/lib/format'
 import { useDataStatus, useCapabilities, useSettings } from '@/lib/useSharedQueries'
 import { SealedBadge } from '@/components/SealedBadge'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { SettingsModal } from '@/components/data/SettingsModal'
+import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
 import { boardTag } from '@/components/stock-table/primitives'
@@ -469,9 +471,11 @@ function HotRankCard({ title, rank, configUrl }: { title: string; rank?: Overvie
 }
 
 export function Dashboard() {
+  const qc = useQueryClient()
   const [selectedDate, setSelectedDate] = useState<string | undefined>()
   const [manualFetching, setManualFetching] = useState(false)
-  const [copiedCode, setCopiedCode] = useState(false)
+  // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
+  const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const dataStatus = useDataStatus({ staleTime: 60_000 })
   const overview = useQuery({
     queryKey: QK.overviewMarket(selectedDate),
@@ -485,14 +489,66 @@ export function Dashboard() {
   const hasDepth = !!caps.data?.capabilities?.['depth5.batch']
   const sealedReady = !!data?.limit?.sealed_ready
   const isSealedDegrade = !hasDepth || !sealedReady
-  // none 档(无 key / 无效 key)→ 显示升级提示横幅
+  // none 档(无 key / 无效 key): 不再阻断功能, 仅实时行情等扩展能力受限
   const isNoKey = settings.data?.mode === 'none'
-  // 无本地数据(enriched/daily 都没有)→ 提示去数据页同步
+  // 无本地数据(enriched/daily 都没有)→ 常驻引导卡片
   // 注: 后端 status 的 rows 为性能刻意返回 0, 用 trading_days 判断是否有数据
   const ds = dataStatus.data
   const hasNoData = !!ds
     && (ds.enriched?.trading_days ?? 0) === 0
     && (ds.daily?.trading_days ?? 0) === 0
+
+  // ===== 盘后管道触发(看板内一键获取数据) =====
+  const [fetchJobId, setFetchJobId] = useState<string | null>(null)
+  const fetchStatus = useQuery({
+    queryKey: QK.pipelineJob(fetchJobId ?? ''),
+    queryFn: () => api.pipelineJob(fetchJobId!),
+    enabled: !!fetchJobId,
+    refetchInterval: (q: any) => {
+      const j = q.state.data
+      return j && (j.status === 'succeeded' || j.status === 'failed') ? false : 1_000
+    },
+  })
+  const startFetch = useMutation({
+    mutationFn: api.pipelineRun,
+    onSuccess: ({ job_id }) => setFetchJobId(job_id),
+  })
+  const isFetching = startFetch.isPending
+    || fetchStatus.data?.status === 'running'
+    || fetchStatus.data?.status === 'pending'
+  const fetchFailed = fetchStatus.data?.status === 'failed'
+  const fetchSucceeded = fetchStatus.data?.status === 'succeeded'
+
+  // 首次使用且无数据 → 自动弹一次引导弹窗(同会话只弹一次)
+  useEffect(() => {
+    if (!hasNoData) return
+    if (settings.data?.onboarding_completed === false) return  // 还在引导流程中,不重复弹
+    if (sessionStorage.getItem('tf_welcome_shown')) return
+    sessionStorage.setItem('tf_welcome_shown', '1')
+    setShowWelcomeModal(true)
+  }, [hasNoData, settings.data?.onboarding_completed])
+
+  // 同步完成后刷新看板数据
+  useEffect(() => {
+    if (fetchSucceeded) {
+      qc.invalidateQueries({ queryKey: QK.dataStatus })
+      qc.invalidateQueries({ queryKey: QK.overviewMarket(undefined) })
+    }
+  }, [fetchSucceeded, qc])
+
+  // 组件重新挂载时(从其他页面切回)恢复正在运行的同步任务进度。
+  // 原因: fetchJobId 是组件内状态, 切走页面时组件卸载、状态丢失, 切回后进度卡片消失。
+  // 修复: 挂载时若无本地数据且未跟踪任何 job, 查一次后端是否有 active job, 有则接管。
+  const resumeTriedRef = useRef(false)
+  useEffect(() => {
+    if (resumeTriedRef.current) return
+    if (!hasNoData) return
+    if (fetchJobId) return
+    resumeTriedRef.current = true
+    api.pipelineJobs(1).then(({ active_id }) => {
+      if (active_id) setFetchJobId(active_id)
+    }).catch(() => { /* 查询失败不阻塞, 用户仍可手动点击获取 */ })
+  }, [hasNoData, fetchJobId])
 
   // 手动刷新: 显示旋转动画; SSE 自动刷新: 静默, 无体感
   const handleRefresh = () => {
@@ -530,59 +586,31 @@ export function Dashboard() {
 
   return (
     <div className="min-h-full bg-base p-3">
-      {/* none 档(无 key)提示横幅 —— 引导用户领取免费 Key 解锁完整能力 */}
-      {isNoKey && (
-        <div className="mb-3 flex items-center gap-2 rounded-card border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
-          <span className="text-secondary leading-relaxed">
-            当前未配置 API Key,批量同步、实时行情等能力不可用。
-            <a
-              href="https://tickflow.org/auth/register?ref=V3KDKGXPEA"
-              target="_blank"
-              rel="noreferrer"
-              className="mx-1 inline-flex items-baseline gap-0.5 font-medium text-warning hover:underline"
-            >
-              前往 TickFlow 官网
-              <ExternalLink className="h-3 w-3 self-center" />
-            </a>
-            免费注册(或填邀请码{' '}
-            <span className="font-mono font-semibold text-warning inline-flex items-baseline gap-1">
-              V3KDKGXPEA
-              <button
-                type="button"
-                onClick={() => {
-                  navigator.clipboard?.writeText('V3KDKGXPEA').then(() => {
-                    setCopiedCode(true)
-                    setTimeout(() => setCopiedCode(false), 1500)
-                  })
-                }}
-                className="text-warning/60 hover:text-warning transition-colors self-center"
-                aria-label="复制邀请码"
-                tabIndex={-1}
-              >
-                {copiedCode ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-              </button>
-            </span>
-            )即可领取免费 API Key,无需付费即可体验。
-          </span>
-        </div>
+      {/* 无本地数据常驻引导卡片 —— 一键触发盘后管道获取数据(无 Key 也可) */}
+      {hasNoData && (
+        <FetchDataCard
+          isFetching={isFetching}
+          isStarting={startFetch.isPending}
+          fetchFailed={fetchFailed}
+          stage={fetchStatus.data?.stage}
+          fetchPct={fetchStatus.data?.progress}
+          onStart={() => startFetch.mutate()}
+          isNoKey={isNoKey}
+        />
       )}
-      {/* 无本地数据提示 —— 引导用户去数据页同步 (仅当已配置 Key 时显示, 无 Key 时优先提示配置 Key) */}
-      {hasNoData && !isNoKey && (
-        <div className="mb-3 flex items-center gap-2 rounded-card border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
-          <span className="text-secondary leading-relaxed">
-            当前暂无数据,请前往数据页面同步行情数据完成后查看。
-            <Link
-              to="/data"
-              className="ml-1 shrink-0 inline-flex items-center gap-0.5 font-medium text-warning hover:underline"
-            >
-              前往同步数据
-              <ArrowUpRight className="h-3 w-3 self-center" />
-            </Link>
-          </span>
-        </div>
-      )}
+      {/* 首次使用自动弹窗(同会话仅一次) */}
+      <AnimatePresence>
+        {showWelcomeModal && (
+          <WelcomeFetchModal
+            isNoKey={isNoKey}
+            onClose={() => setShowWelcomeModal(false)}
+            onStart={() => {
+              startFetch.mutate()
+              setShowWelcomeModal(false)
+            }}
+          />
+        )}
+      </AnimatePresence>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-card border border-border bg-surface/85 px-3 py-2">
         <div className="flex items-center gap-2">
           <Gauge className="h-4 w-4 text-accent" />
@@ -718,5 +746,136 @@ export function Dashboard() {
         </aside>
       </div>
     </div>
+  )
+}
+
+// ===== 无数据常驻引导卡片: 一键触发盘后管道获取行情数据(无 Key 也可) =====
+function FetchDataCard({
+  isFetching, isStarting, fetchFailed, stage, fetchPct, onStart, isNoKey,
+}: {
+  isFetching: boolean
+  isStarting: boolean
+  fetchFailed: boolean
+  stage?: string
+  fetchPct?: number
+  onStart: () => void
+  isNoKey: boolean
+}) {
+  const stageText = stage ? (STAGE_LABELS[stage] ?? stage) : '正在同步行情数据…'
+  return (
+    <div className="mb-3 rounded-card border border-border bg-surface/85 p-3.5">
+      <div className="flex items-start gap-3">
+        <div className="rounded-lg bg-accent/10 p-2 shrink-0">
+          <Database className="h-4 w-4 text-accent" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium text-foreground">当前暂无数据</div>
+          <p className="mt-1 text-xs text-secondary leading-relaxed">
+            首次使用需获取行情数据后才能查看看板。系统将从免费数据源拉取近 1 年全 A 股日K(约 5500 只),预计 1-3 分钟,期间可继续浏览其他页面。
+          </p>
+          {isNoKey && (
+            <p className="mt-1 text-[11px] text-warning/80 leading-relaxed">
+              ⓘ 无需 API Key,当前为 None 档即可获取历史日K,可制定策略+回测。配置免费 Key 可解锁实时行情监控能力。
+            </p>
+          )}
+
+          {isFetching ? (
+            <div className="mt-3">
+              <div className="flex items-center justify-between text-[11px] text-muted mb-1.5">
+                <span className="inline-flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  {isStarting ? '正在启动同步任务…' : stageText}
+                </span>
+                <span className="font-mono tabular">
+                  {typeof fetchPct === 'number' ? `${Math.round(fetchPct)}%` : ''}
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
+                <motion.div
+                  className="h-full bg-accent"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.max(2, Math.min(100, fetchPct ?? 0))}%` }}
+                  transition={{ duration: 0.4, ease: 'easeOut' }}
+                />
+              </div>
+            </div>
+          ) : fetchFailed ? (
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-xs text-danger">同步失败,请重试</span>
+              <button
+                onClick={onStart}
+                className="inline-flex items-center gap-1.5 px-3 h-8 rounded-btn bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors"
+              >
+                <Play className="h-3.5 w-3.5" />重新获取
+              </button>
+            </div>
+          ) : (
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                onClick={onStart}
+                className="inline-flex items-center gap-1.5 px-4 h-8 rounded-btn bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors"
+              >
+                <Play className="h-3.5 w-3.5" />立即获取数据
+              </button>
+              <Link
+                to="/data"
+                className="inline-flex items-center gap-0.5 text-xs text-secondary hover:text-accent transition-colors"
+              >
+                前往数据页
+                <ArrowUpRight className="h-3 w-3 self-center" />
+              </Link>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ===== 首次使用自动弹窗: 询问用户后触发盘后管道 =====
+function WelcomeFetchModal({
+  isNoKey, onClose, onStart,
+}: {
+  isNoKey: boolean
+  onClose: () => void
+  onStart: () => void
+}) {
+  return (
+    <SettingsModal title="欢迎首次使用 · 获取行情数据" onClose={onClose}>
+      <div className="text-center">
+        <motion.div
+          initial={{ scale: 0.85, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+          className="mx-auto w-fit rounded-2xl bg-accent/10 p-3.5"
+        >
+          <Sparkles className="h-7 w-7 text-accent" />
+        </motion.div>
+        <h3 className="mt-4 text-base font-semibold text-foreground">首次使用,需先获取行情数据</h3>
+        <p className="mt-2 text-xs text-secondary leading-relaxed">
+          系统将从免费数据源拉取近 1 年全 A 股日K(约 5500 只),预计 1-3 分钟。
+          同步期间可继续浏览其他页面,完成后看板自动刷新。
+        </p>
+        {isNoKey && (
+          <div className="mt-3 rounded-btn bg-elevated/60 px-3 py-2 text-[11px] text-muted leading-relaxed">
+            ⓘ 当前无需 API Key,None 档即可获取历史日K数据。
+          </div>
+        )}
+        <div className="mt-5 flex items-center justify-center gap-2.5">
+          <button
+            onClick={onClose}
+            className="px-4 h-9 rounded-btn text-sm text-secondary hover:text-foreground hover:bg-elevated transition-colors"
+          >
+            稍后再说
+          </button>
+          <button
+            onClick={onStart}
+            className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold shadow-lg shadow-accent/20 hover:bg-accent/90 transition-all"
+          >
+            <Play className="h-4 w-4" />开始获取
+          </button>
+        </div>
+      </div>
+    </SettingsModal>
   )
 }

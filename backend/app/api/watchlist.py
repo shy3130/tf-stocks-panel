@@ -27,28 +27,48 @@ class BatchAddRequest(BaseModel):
     note: str = ""
 
 
+def _with_names(rows: list[dict], request: Request) -> list[dict]:
+    if not rows:
+        return rows
+    try:
+        df_i = request.app.state.repo.get_instruments()
+        if df_i.is_empty() or "symbol" not in df_i.columns or "name" not in df_i.columns:
+            return rows
+        name_by_symbol = dict(df_i.select(["symbol", "name"]).iter_rows())
+        return [{**row, "name": name_by_symbol.get(row.get("symbol"))} for row in rows]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("attach watchlist names failed: %s", e)
+        return rows
+
+
 @router.get("")
-def list_all():
-    return {"symbols": watchlist.list_symbols()}
+def list_all(request: Request):
+    return {"symbols": _with_names(watchlist.list_symbols(), request)}
 
 
 @router.post("")
-def add_one(req: AddRequest):
+def add_one(req: AddRequest, request: Request):
     rows = watchlist.add(req.symbol, req.note)
-    return {"symbols": rows}
+    return {"symbols": _with_names(rows, request)}
 
 
 @router.post("/batch")
-def add_batch(req: BatchAddRequest):
+def add_batch(req: BatchAddRequest, request: Request):
     for sym in req.symbols:
         watchlist.add(sym, req.note)
-    return {"symbols": watchlist.list_symbols(), "added": len(req.symbols)}
+    return {"symbols": _with_names(watchlist.list_symbols(), request), "added": len(req.symbols)}
+
+
+@router.post("/{symbol}/top")
+def move_one_to_top(symbol: str, request: Request):
+    rows = watchlist.move_to_top(symbol)
+    return {"symbols": _with_names(rows, request)}
 
 
 @router.delete("/{symbol}")
-def remove_one(symbol: str):
+def remove_one(symbol: str, request: Request):
     rows = watchlist.remove(symbol)
-    return {"symbols": rows}
+    return {"symbols": _with_names(rows, request)}
 
 
 @router.delete("")

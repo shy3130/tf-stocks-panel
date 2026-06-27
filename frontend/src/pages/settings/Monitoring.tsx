@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { useQueryClient, useMutation } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
+import { useQueryClient, useMutation, useQuery } from '@tanstack/react-query'
 import {
   Activity,
   Shield,
@@ -46,8 +47,9 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const { data: intervalData } = useQuoteInterval()
   const updateInterval = useUpdateQuoteInterval()
   const toggleQuote = useToggleRealtimeQuotes()
-  // none/free 档(无实时行情权限)→ rank < starter(1)
-  const isFreeTier = tierRank(caps?.label ?? '') < 1
+  const tier = tierRank(caps?.label ?? '')
+  const isNoneTier = tier < 0
+  const isFreeTier = tier === 0
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
   const refreshPages = prefs?.sse_refresh_pages ?? {}
   const limitLadderMonitor = prefs?.limit_ladder_monitor_enabled ?? false
@@ -60,6 +62,16 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const interval = intervalData?.interval ?? 10
   const minInterval = intervalData?.min_interval ?? 5
   const maxInterval = intervalData?.max_interval ?? 60
+  const [intervalDraft, setIntervalDraft] = useState(interval)
+  const watchlistSymbols = prefs?.realtime_watchlist_symbols ?? []
+  const watchlist = useQuery({
+    queryKey: QK.watchlist,
+    queryFn: () => api.watchlistList(),
+    enabled: isFreeTier && watchlistSymbols.length > 0,
+  })
+  const watchlistNameBySymbol = new Map(
+    (watchlist.data?.symbols ?? []).map(row => [row.symbol, row.name] as const),
+  )
 
   const save = useCallback(async (cfg: Record<string, unknown>) => {
     try {
@@ -110,6 +122,18 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     onError: () => toast('修正请求失败', 'error'),
   })
 
+  useEffect(() => {
+    setIntervalDraft(interval)
+  }, [interval])
+
+  useEffect(() => {
+    if (intervalDraft === interval) return
+    const t = window.setTimeout(() => {
+      updateInterval.mutate(intervalDraft)
+    }, 2000)
+    return () => window.clearTimeout(t)
+  }, [intervalDraft, interval, updateInterval])
+
   // highlight=depth-fix 时闪烁高亮连板梯队修正卡片
   const [flash, setFlash] = useState(false)
   const flashedRef = useRef(false)
@@ -125,8 +149,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     }
   }, [highlight])
 
-  // Free 档位 — 显示升级提示
-  if (isFreeTier) {
+  if (isNoneTier) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
         <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl
@@ -135,8 +158,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </div>
         <h2 className="text-lg font-medium text-foreground mb-2">实时监控</h2>
         <p className="text-sm text-secondary max-w-md mb-6">
-          实时行情轮询、策略监控等功能需要 Starter 及以上档位。
-          升级后可配置轮询间隔、选择监控策略池。
+          实时行情需要 Free 及以上档位。None 档可使用 free-api 获取历史日K（当日数据需盘后1-2小时），但不能调用付费服务器实时接口。
         </p>
         <a
           href="/settings?tab=account"
@@ -167,10 +189,12 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
             <div className="flex items-center justify-between gap-4 py-1">
               <div className="min-w-0">
                 <div className="text-sm text-foreground">轮询间隔</div>
-                <div className="text-[11px] text-muted">每轮拉取全市场行情的时间间隔</div>
+                <div className="text-[11px] text-muted">
+                  {isFreeTier ? '每轮拉取自选股实时行情的时间间隔' : '每轮拉取全市场行情的时间间隔'}
+                </div>
               </div>
               <span className="text-[11px] font-mono text-foreground shrink-0 tabular-nums">
-                {interval < 1 ? interval.toFixed(1) : interval.toFixed(0)}s
+                {intervalDraft < 1 ? intervalDraft.toFixed(1) : intervalDraft.toFixed(0)}s
               </span>
             </div>
             <div className="flex items-center gap-3 mt-2">
@@ -179,18 +203,54 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                 min={minInterval}
                 max={maxInterval}
                 step={minInterval < 1 ? 0.1 : minInterval < 3 ? 0.5 : 1}
-                value={interval}
-                onChange={(e) => updateInterval.mutate(parseFloat(e.target.value))}
+                value={intervalDraft}
+                onChange={(e) => setIntervalDraft(parseFloat(e.target.value))}
                 className="flex-1 h-1 accent-accent cursor-pointer"
               />
               <span className="text-[10px] text-muted shrink-0">
-                {minInterval}s — {maxInterval}s
+                {intervalDraft !== interval ? '2秒后保存' : `${minInterval}s — ${maxInterval}s`}
               </span>
             </div>
           </div>
         </Card>
 
-        {/* 页面刷新 */}
+        {isFreeTier && (
+        <Card icon={Activity} title="自选股实时">
+          <div className="mb-3 rounded-btn border border-accent/25 bg-accent/10 px-3 py-2 text-xs font-medium leading-snug text-accent">
+            Free 档开启实时行情时自动监控「自选」页面前 5 个标的，最低 6 秒刷新。
+          </div>
+          {watchlistSymbols.length > 0 ? (
+            <div className="space-y-1.5">
+              {watchlistSymbols.map(symbol => {
+                const name = watchlistNameBySymbol.get(symbol)
+                return (
+                  <div key={symbol} className="flex items-center justify-between rounded-btn bg-base/50 border border-border px-2 py-1.5">
+                    <div className="min-w-0 flex items-baseline gap-1.5">
+                      <span className="text-xs font-mono text-foreground">{symbol}</span>
+                      {name && <span className="truncate text-[11px] text-secondary">{name}</span>}
+                    </div>
+                    <span className="text-[10px] text-muted shrink-0">自选页</span>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="rounded-btn border border-border bg-base/40 px-3 py-3 text-xs text-muted">
+              自选列表为空，Free 实时行情开启前请先添加自选股。
+            </div>
+          )}
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <span className="text-[10px] text-muted">当前 {watchlistSymbols.length}/5 只</span>
+            <Link
+              to="/watchlist"
+              className="px-3 py-1 rounded-btn bg-elevated text-secondary text-xs font-medium hover:text-foreground transition-colors"
+            >
+              管理自选
+            </Link>
+          </div>
+        </Card>
+        )}
+        {!isFreeTier && (
         <Card icon={Wifi} title="页面实时刷新">
           <p className="text-xs text-secondary mb-4">
             选择哪些页面跟随 SSE 实时刷新数据。关闭的页面不会被推送，
@@ -208,7 +268,9 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
             ))}
           </div>
         </Card>
+        )}
 
+        {!isFreeTier && (
         <Card icon={BarChart3} title="左侧菜单指数">
           <p className="text-xs text-secondary mb-4">
             选择实时行情开启时，左侧菜单底部显示哪些指数点位和涨跌幅。
@@ -233,6 +295,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
             />
           </div>
         </Card>
+        )}
       </div>
 
       {/* ========== 右列 ========== */}

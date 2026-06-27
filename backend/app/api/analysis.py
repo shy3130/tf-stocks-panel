@@ -9,8 +9,6 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.services.ext_data import ExtConfigStore
-
 router = APIRouter(prefix="/api/analysis-menus", tags=["analysis-menus"])
 
 
@@ -113,44 +111,13 @@ def _save(request: Request, menu: AnalysisMenu) -> AnalysisMenu:
 
 
 def _default_menus(request: Request) -> list[AnalysisMenu]:
-    ext_store = ExtConfigStore(_data_dir(request))
-    menus: list[AnalysisMenu] = []
-    for cfg in ext_store.load_all():
-        fields = cfg.fields
-        concept = next((f for f in fields if "概念" in f.name or "概念" in f.label or "concept" in f.name.lower()), None)
-        if concept:
-            detail_names = ["股票简称", "股票代码", concept.name, "人气排名", "资金流向", "PE", "PB"]
-            detail_columns = []
-            for name in detail_names:
-                f = next((x for x in fields if x.name == name), None)
-                if not f:
-                    continue
-                is_num = f.dtype in ("int", "float")
-                detail_columns.append(AnalysisColumn(
-                    field=f.name,
-                    label=f.label or f.name,
-                    type="number" if is_num else "string",
-                    sortable=is_num,
-                    precision=2 if f.dtype == "float" else None,
-                ))
-            menus.append(AnalysisMenu(
-                id="concept_analysis",
-                label="概念分析",
-                icon="tags",
-                data_source=cfg.id,
-                template="dimension_rank",
-                dimension_field=concept.name,
-                group_columns=[
-                    AnalysisColumn(field="__dimension", label="概念"),
-                    AnalysisColumn(field="__count", label="股票数", type="number", sortable=True),
-                ],
-                detail_columns=detail_columns,
-                default_sort=DefaultSort(field="人气排名", order="asc") if any(c.field == "人气排名" for c in detail_columns) else None,
-                order=100,
-                builtin=True,
-            ))
-            break
-    return menus
+    """自动生成的默认分析菜单。
+
+    历史上会扫描扩展数据配置,对含「概念」字段的表自动生成一个「概念分析」菜单。
+    现已关闭自动生成 —— 内置的概念分析页(/concept-analysis)已覆盖该场景,
+    自动菜单会造成导航重复。需要时用户可在「设置 → 扩展页面」手动创建。
+    """
+    return []
 
 
 @router.get("")

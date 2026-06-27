@@ -287,6 +287,16 @@ def get_preferences() -> dict:
         "indices_nav_pinned": preferences.get_indices_nav_pinned(),
         "minute_sync_enabled": preferences.get_minute_sync_enabled(),
         "minute_sync_days": preferences.get_minute_sync_days(),
+        "daily_data_provider": preferences.get_daily_data_provider(),
+        "adj_factor_provider": preferences.get_adj_factor_provider(),
+        "minute_data_provider": preferences.get_minute_data_provider(),
+        "realtime_data_provider": preferences.get_realtime_data_provider(),
+        "realtime_watchlist_symbols": preferences.get_realtime_watchlist_symbols(),
+        **preferences.get_realtime_quote_scope(),
+        "pipeline_pull_a_share": preferences.get_pipeline_pull_a_share(),
+        "pipeline_pull_etf": preferences.get_pipeline_pull_etf(),
+        "pipeline_pull_index": preferences.get_pipeline_pull_index(),
+        "pipeline_index_symbols": preferences.get_pipeline_index_symbols(),
         "pipeline_schedule": preferences.get_pipeline_schedule(),
         "instruments_schedule": preferences.get_instruments_schedule(),
         "enriched_batch_size": preferences.get_enriched_batch_size(),
@@ -384,11 +394,19 @@ class RealtimeQuotesPrefs(BaseModel):
     realtime_quotes_enabled: bool
 
 
+class RealtimeQuoteScopePrefs(BaseModel):
+    realtime_pull_stock: bool | None = None
+    realtime_pull_etf: bool | None = None
+    realtime_pull_index: bool | None = None
+    realtime_index_mode: str | None = None
+    realtime_index_symbols: list[str] | None = None
+
+
 @router.put("/preferences/realtime-quotes")
 def update_realtime_quotes(req: RealtimeQuotesPrefs, request: Request) -> dict:
     """保存全局实时行情开关。
 
-    none/free 档无实时行情权限:拒绝开启,persist 为关闭并返回 allowed=False,
+    none 档无实时行情权限；free 档开启自选股实时；starter+ 开启全市场实时。
     前端据此把开关置灰 / 回弹。
     """
     from app.services import preferences
@@ -401,6 +419,9 @@ def update_realtime_quotes(req: RealtimeQuotesPrefs, request: Request) -> dict:
         if qs:
             qs.disable()
         return {"realtime_quotes_enabled": False, "realtime_allowed": False}
+    if req.realtime_quotes_enabled and qs and qs.realtime_mode() == "watchlist" and not preferences.get_realtime_watchlist_symbols():
+        preferences.save({"realtime_quotes_enabled": False})
+        return {"realtime_quotes_enabled": False, "realtime_allowed": True, "mode": "watchlist", "error": "watchlist_empty"}
 
     preferences.save({"realtime_quotes_enabled": req.realtime_quotes_enabled})
     if qs:
@@ -410,6 +431,26 @@ def update_realtime_quotes(req: RealtimeQuotesPrefs, request: Request) -> dict:
             qs.disable()
 
     return {"realtime_quotes_enabled": req.realtime_quotes_enabled, "realtime_allowed": allowed}
+
+
+@router.put("/preferences/realtime-quote-scope")
+def update_realtime_quote_scope(req: RealtimeQuoteScopePrefs) -> dict:
+    """保存盘中实时行情范围；独立于盘后管道范围。"""
+    from app.services import preferences
+    cfg = req.model_dump(exclude_none=True)
+    return preferences.set_realtime_quote_scope(cfg)
+
+
+class RealtimeWatchlistPrefs(BaseModel):
+    symbols: list[str] = []
+
+
+@router.put("/preferences/realtime-watchlist")
+def update_realtime_watchlist(req: RealtimeWatchlistPrefs) -> dict:
+    """兼容旧入口；Free 实时标的由自选页前 5 个决定。"""
+    from app.services import preferences
+    symbols = preferences.set_realtime_watchlist_symbols(req.symbols)
+    return {"realtime_watchlist_symbols": symbols}
 
 
 class IndicesNavPinnedPrefs(BaseModel):
@@ -462,6 +503,34 @@ def update_realtime_monitor_config(req: RealtimeMonitorConfigIn, request: Reques
                 pass
 
     return result
+
+
+class PipelinePullTypesIn(BaseModel):
+    """盘后管道拉取内容开关(A股 / ETF / 指数 独立控制)。"""
+    pipeline_pull_a_share: bool | None = None
+    pipeline_pull_etf: bool | None = None
+    pipeline_pull_index: bool | None = None
+
+
+@router.put("/preferences/pipeline-pull-types")
+def update_pipeline_pull_types(req: PipelinePullTypesIn) -> dict:
+    """更新盘后管道拉取内容开关。"""
+    from app.services import preferences
+    cfg = req.model_dump(exclude_none=True)
+    return preferences.set_pipeline_pull_types(cfg)
+
+
+class PipelineIndexSymbolsIn(BaseModel):
+    """指数自定义拉取代码(逗号/换行/空格分隔,空串表示全量)。"""
+    symbols: str = ""
+
+
+@router.put("/preferences/pipeline-index-symbols")
+def update_pipeline_index_symbols(req: PipelineIndexSymbolsIn) -> dict:
+    """保存指数自定义拉取代码。"""
+    from app.services import preferences
+    symbols = preferences.set_pipeline_index_symbols(req.symbols)
+    return {"pipeline_index_symbols": symbols}
 
 
 class QuoteIntervalIn(BaseModel):

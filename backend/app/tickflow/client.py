@@ -18,6 +18,7 @@ from app import secrets_store
 
 _sync_client: TickFlow | None = None
 _async_client: AsyncTickFlow | None = None
+_paid_realtime_client: TickFlow | None = None
 
 
 # ===== 服务器归属判定 =====
@@ -71,11 +72,27 @@ def get_async_client() -> AsyncTickFlow:
     return _async_client
 
 
+def get_paid_realtime_client() -> TickFlow | None:
+    """实时行情专用付费服务器客户端。
+
+    none/free 的历史日K仍走 get_client() 的 free-api；实时行情全部走付费服务器。
+    Free 档如果有有效 key，也使用这里的 paid endpoint 调按标的实时接口。
+    """
+    global _paid_realtime_client
+    key = secrets_store.get_tickflow_key()
+    if not key:
+        return None
+    if _paid_realtime_client is None:
+        _paid_realtime_client = TickFlow(api_key=key, base_url=_base_url())
+    return _paid_realtime_client
+
+
 def reset_clients() -> None:
     """Key 变化后调用 — 让下一次 get_client() 拿新实例。"""
-    global _sync_client, _async_client
+    global _sync_client, _async_client, _paid_realtime_client
     _sync_client = None
     _async_client = None
+    _paid_realtime_client = None
 
 
 def current_mode() -> str:

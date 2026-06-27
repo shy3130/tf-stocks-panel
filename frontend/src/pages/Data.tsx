@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -9,12 +8,15 @@ import {
   HardDrive,
   Clock,
   Calendar,
+  CheckSquare,
   Trash2,
   Plus,
   Wifi,
+  SlidersHorizontal,
   AlertTriangle,
   Info,
 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { EndpointTestDialog } from '@/components/EndpointTestDialog'
 import { api, type ExtDataConfig } from '@/lib/api'
 import {
@@ -39,6 +41,8 @@ import { ScheduleEditor } from '@/components/data/ScheduleEditor'
 import { ExtendHistoryPanel } from '@/components/data/ExtendHistoryPanel'
 import { EnrichedRebuildPanel } from '@/components/data/EnrichedRebuildPanel'
 import { MinuteSyncConfig } from '@/components/data/MinuteSyncConfig'
+import { PipelineScopeConfig } from '@/components/data/PipelineScopeConfig'
+import { PageSettingsModal, getCardVisibility } from '@/components/data/PageSettingsModal'
 import { QuoteConfigCard } from '@/components/data/QuoteConfigCard'
 import { EnrichedSchemaModal } from '@/components/data/SchemaModal'
 import { Skeleton } from '@/components/data/Skeleton'
@@ -187,7 +191,27 @@ export function Data() {
   const hasAdjCap = !!caps.data?.capabilities?.['adj_factor']
   const hasDailyBatchCap = !!caps.data?.capabilities?.['kline.daily.batch']
   const hasMinuteCap = !!caps.data?.capabilities?.['kline.minute.batch']
-  const pipelineSteps = ['日K', ...(hasAdjCap ? ['复权'] : []), '指标', '指数', ...((hasMinuteCap && minuteAuto) ? ['分钟K'] : [])]
+  const indexAuto = prefs.data?.pipeline_pull_index ?? true
+  const etfAuto = prefs.data?.pipeline_pull_etf ?? false
+  const pipelineSteps = [
+    '日K',
+    ...(hasAdjCap ? ['复权'] : []),
+    '指标',
+    ...(indexAuto ? ['指数'] : []),
+    ...(etfAuto ? ['ETF'] : []),
+    ...((hasMinuteCap && minuteAuto) ? ['分钟K'] : []),
+  ]
+
+  // 数据画像卡片显隐(由页面设置弹窗控制,存 localStorage)
+  const [cardVisibleTick, setCardVisibleTick] = useState(0)
+  useEffect(() => {
+    const handler = () => setCardVisibleTick(t => t + 1)
+    window.addEventListener('data-card-visible-change', handler)
+    return () => window.removeEventListener('data-card-visible-change', handler)
+  }, [])
+  const cardVisible = getCardVisibility(caps.data?.capabilities)
+  // 引用 cardVisibleTick 触发重渲染(避免 lint 警告)
+  void cardVisibleTick
 
   useEffect(() => {
     if (job.data && (job.data.status === 'succeeded' || job.data.status === 'failed')) {
@@ -223,6 +247,14 @@ export function Data() {
     latest_date: s.index_daily?.latest_date ?? s.index_enriched?.latest_date ?? null,
     symbols_covered: s.index_daily?.symbols_covered ?? s.index_instruments?.rows ?? 0,
     trading_days: s.index_daily?.trading_days ?? s.index_enriched?.trading_days ?? 0,
+  } : null
+  // ETF 统计(后端已按 asset_type='etf' 从 index 存储中拆分)
+  const etfOverviewStats = s ? {
+    rows: 0,
+    earliest_date: s.etf_daily?.earliest_date ?? s.etf_enriched?.earliest_date ?? null,
+    latest_date: s.etf_daily?.latest_date ?? s.etf_enriched?.latest_date ?? null,
+    symbols_covered: s.etf_daily?.symbols_covered ?? s.etf_instruments?.rows ?? 0,
+    trading_days: s.etf_daily?.trading_days ?? s.etf_enriched?.trading_days ?? 0,
   } : null
   const indexOverviewLabel = s ? '日 · 维表 · 日K · 指标' : undefined
   const indexEarliestDate = s?.index_daily?.earliest_date ?? s?.index_enriched?.earliest_date ?? null
@@ -293,31 +325,28 @@ export function Data() {
         subtitle="本地数据画像 · 同步状态 · 历史记录"
         right={
           <div className="flex items-center gap-3">
-            {!hasData && !isLoading && !isNoKey && (
+            {!hasData && !isLoading && (
               <span className="text-xs text-accent animate-pulse">首次使用请点击右侧按钮同步数据</span>
             )}
-            {isNoKey ? (
-              <button
-                disabled
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-gradient-to-r from-accent/25 to-accent/10 border border-accent/30 text-accent text-xs font-medium opacity-40 cursor-not-allowed transition-all duration-150"
-              >
+            <button
+              onClick={() => startSync.mutate()}
+              disabled={isStarting}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-gradient-to-r from-accent/25 to-accent/10 border border-accent/30 text-accent text-xs font-medium hover:from-accent/35 hover:to-accent/20 disabled:opacity-40 transition-all duration-150"
+            >
+              {(isRunning || isStarting) ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
                 <Play className="h-3.5 w-3.5" />
-                立即同步
-              </button>
-            ) : (
-              <button
-                onClick={() => startSync.mutate()}
-                disabled={isStarting}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-gradient-to-r from-accent/25 to-accent/10 border border-accent/30 text-accent text-xs font-medium hover:from-accent/35 hover:to-accent/20 disabled:opacity-40 transition-all duration-150"
-              >
-                {(isRunning || isStarting) ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Play className="h-3.5 w-3.5" />
-                )}
-                {isStarting ? '启动中…' : isRunning ? '同步中…' : '立即同步'}
-              </button>
-            )}
+              )}
+              {isStarting ? '启动中…' : isRunning ? '同步中…' : '立即同步'}
+            </button>
+            <button
+              onClick={() => setOpenSettings('pipeline-scope')}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
+            >
+              <CheckSquare className="h-3.5 w-3.5" />
+              数据范围
+            </button>
             <div className="w-px h-4 bg-border" />
             <div className="flex items-center gap-1.5">
               <button
@@ -335,6 +364,13 @@ export function Data() {
                 测试端点
               </button>
               <button
+                onClick={() => setOpenSettings('page-settings')}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                页面设置
+              </button>
+              <button
                 onClick={() => setShowClearConfirm(true)}
                 disabled={isRunning}
                 className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-muted hover:text-danger hover:bg-danger/8 text-xs transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none"
@@ -348,13 +384,14 @@ export function Data() {
       />
 
       <div className="px-8 py-6 space-y-6 max-w-6xl">
-        {/* 未配置 API Key 告警条 —— 引导用户去配置 Key 后才能同步 */}
+        {/* None 档提示 —— 非阻断: 无需 Key 也可获取历史日K, 仅实时行情等扩展能力受限 */}
         {isNoKey && (
-          <div className="flex items-center gap-2 rounded-card border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+          <div className="flex items-center gap-2 rounded-card border border-border bg-elevated/40 px-3 py-2 text-xs">
+            <Info className="h-4 w-4 shrink-0 text-muted" />
             <span className="text-secondary leading-relaxed">
-              未配置 API Key,无法同步数据,请前往
-              <Link to="/settings?tab=account" className="mx-0.5 font-medium text-warning hover:underline">
+              当前为 None 档,将使用免费数据源获取历史日K(无需注册)。
+              配置 API Key 可解锁实时行情监控等扩展能力,前往
+              <Link to="/settings?tab=account" className="mx-0.5 font-medium text-accent hover:underline">
                 配置
               </Link>
               。
@@ -411,7 +448,7 @@ export function Data() {
               <div className="space-y-2">
                 <div className="flex items-center gap-1.5 text-[10px] text-muted pb-2 border-b border-border/50">
                   <span className="text-accent/60 font-medium">盘前</span>
-                  <span>标的维表</span>
+                  <span>个股维表</span>
                   <span className="text-border">→</span>
                   <span className="text-accent/60 font-medium">盘后</span>
                   {pipelineSteps.map((step, i) => (
@@ -427,7 +464,7 @@ export function Data() {
                 </div>
                 <div className="flex items-center justify-between text-[11px]">
                   <div className="flex items-center gap-1">
-                    <span className="text-muted">盘前 · 标的维表</span>
+                    <span className="text-muted">盘前 · 个股维表</span>
                     <span className="text-muted/50">·</span>
                     <span className="font-mono text-secondary">
                       {`${String(instrumentsSched.hour).padStart(2, '0')}:${String(instrumentsSched.minute).padStart(2, '0')}`}
@@ -548,7 +585,7 @@ export function Data() {
                   </div>
                 ))
               ) : [
-                { label: '标的维表', files: s?.storage.instruments_files, size: s?.storage.instruments_size_mb },
+                { label: '个股维表', files: s?.storage.instruments_files, size: s?.storage.instruments_size_mb },
                 { label: '日 K',     files: s?.storage.daily_files,       size: s?.storage.daily_size_mb },
                 { label: '除权因子', files: s?.storage.adj_factor_files,  size: s?.storage.adj_factor_size_mb },
                 { label: 'Enriched', files: s?.storage.enriched_files,    size: s?.storage.enriched_size_mb },
@@ -583,8 +620,9 @@ export function Data() {
         <div>
           <SectionTitle icon={Database}>数据画像</SectionTitle>
           <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 items-stretch">
+            {cardVisible.instruments && (
             <StatCard
-              title="标的维表"
+              title="个股维表"
               hint="盘前同步 · 元数据快照"
               stats={s?.instruments}
               isInstrument
@@ -599,6 +637,8 @@ export function Data() {
               auto
               onShowFields={() => setSchemaTable('instruments')}
             />
+            )}
+            {cardVisible.daily && (
             <StatCard
               title="日 K"
               hint="增量同步 · 全市场"
@@ -616,21 +656,8 @@ export function Data() {
                onSettings={hasData ? () => setOpenSettings(v => v === 'daily' ? null : 'daily') : undefined}
               settingsOpen={openSettings === 'daily'}
             />
-            <StatCard
-              title="除权因子"
-              hint="增量同步 · 全市场"
-              stats={s?.adj_factor}
-              loading={isLoading}
-              active={activeCard === 'adj_factor'}
-              done={doneStages.has('adj_factor')}
-              skipped={skippedCards.has('adj_factor')}
-              stagePct={activeCard === 'adj_factor' ? (job.data?.stage_pct ?? 0) : 0}
-              tierKey="adj_factor"
-              capLimits={caps.data?.capabilities}
-              tierLabel={caps.data?.label}
-              auto
-              onShowFields={() => setSchemaTable('adj_factor')}
-            />
+            )}
+            {cardVisible.enriched && (
             <StatCard
               title="Enriched"
               hint="复权 OHLCV + 技术指标"
@@ -650,8 +677,10 @@ export function Data() {
                onSettings={hasData ? () => setOpenSettings(v => v === 'enriched' ? null : 'enriched') : undefined}
               settingsOpen={openSettings === 'enriched'}
             />
+            )}
+            {cardVisible.index && (
             <StatCard
-              title="指数数据"
+              title="指数"
               hint="CN_Index · 独立存储"
               stats={indexOverviewStats}
               loading={isLoading}
@@ -662,7 +691,7 @@ export function Data() {
               tierKey="daily"
               capLimits={caps.data?.capabilities}
               tierLabel={caps.data?.label}
-              auto
+              auto={indexAuto}
               subLabel={indexOverviewLabel}
               fieldTabs={[
                 { label: '维表', table: 'index_instruments' },
@@ -673,6 +702,44 @@ export function Data() {
               onSettings={hasData ? () => setOpenSettings(v => v === 'index' ? null : 'index') : undefined}
               settingsOpen={openSettings === 'index'}
             />
+            )}
+            {cardVisible.etf && (
+            <StatCard
+              title="ETF"
+              hint="场内基金 · 独立存储"
+              stats={etfOverviewStats}
+              loading={isLoading}
+              tierKey="etf"
+              capLimits={caps.data?.capabilities}
+              tierLabel={caps.data?.label}
+              auto={etfAuto}
+              subLabel="维表 · 日K · 指标"
+              fieldTabs={[
+                { label: '维表', table: 'etf_instruments' },
+                { label: '日K', table: 'etf_daily' },
+                { label: '指标', table: 'etf_enriched' },
+              ] as FieldTab[]}
+              onShowFields={(t) => setSchemaTable(t ?? 'etf_daily')}
+            />
+            )}
+            {cardVisible.adj_factor && (
+            <StatCard
+              title="除权因子"
+              hint="增量同步 · 全市场"
+              stats={s?.adj_factor}
+              loading={isLoading}
+              active={activeCard === 'adj_factor'}
+              done={doneStages.has('adj_factor')}
+              skipped={skippedCards.has('adj_factor')}
+              stagePct={activeCard === 'adj_factor' ? (job.data?.stage_pct ?? 0) : 0}
+              tierKey="adj_factor"
+              capLimits={caps.data?.capabilities}
+              tierLabel={caps.data?.label}
+              auto
+              onShowFields={() => setSchemaTable('adj_factor')}
+            />
+            )}
+            {cardVisible.minute && (
             <StatCard
               title="分钟 K"
               hint="全市场同步"
@@ -690,6 +757,8 @@ export function Data() {
                onSettings={hasData ? () => setOpenSettings(v => v === 'minute' ? null : 'minute') : undefined}
               settingsOpen={openSettings === 'minute'}
             />
+            )}
+            {cardVisible.financials && (
             <StatCard
               title="财务数据"
               hint="利润表 / 资负表 / 现金流 / 指标"
@@ -699,6 +768,7 @@ export function Data() {
               capLimits={caps.data?.capabilities}
               tierLabel={caps.data?.label}
             />
+            )}
             {(extConfigs.data?.items ?? []).map((ext) => (
               <ExtDataStatCard
                 key={ext.id}
@@ -797,8 +867,24 @@ export function Data() {
       </AnimatePresence>
 
       <AnimatePresence>
+        {openSettings === 'pipeline-scope' && (
+          <SettingsModal title="盘后管道 · 拉取内容" onClose={() => setOpenSettings(null)}>
+            <PipelineScopeConfig />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'page-settings' && (
+          <SettingsModal title="页面设置 · 数据画像卡片" onClose={() => setOpenSettings(null)}>
+            <PageSettingsModal caps={caps.data?.capabilities} />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {openSettings === 'index' && (
-          <SettingsModal title="指数数据 · 手动获取" onClose={() => setOpenSettings(null)}>
+          <SettingsModal title="指数 · 手动获取" onClose={() => setOpenSettings(null)}>
             <div className="space-y-4">
               <div className="rounded-card border border-border bg-base/30 p-4 space-y-3">
                 <div>
@@ -936,9 +1022,9 @@ export function Data() {
                     此操作将<span className="text-danger font-medium">永久删除</span>所有已同步的本地数据，包括：
                   </p>
                   <ul className="mt-2 text-[11px] text-muted leading-relaxed space-y-0.5">
-                    <li>· 标的维表、日 K、除权因子</li>
+                    <li>· 个股维表、日 K、除权因子</li>
                     <li>· Enriched 指标数据、分钟 K</li>
-                    <li>· 财务数据、指数数据</li>
+                    <li>· 财务数据、指数、ETF</li>
                   </ul>
                   <p className="mt-2 text-[11px] text-danger/90">
                     操作不可恢复，需重新执行同步才能恢复数据。

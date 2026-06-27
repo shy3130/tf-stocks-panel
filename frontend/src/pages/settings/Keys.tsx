@@ -14,7 +14,6 @@ import {
   Loader2,
   Save,
   Check,
-  Copy,
   HelpCircle,
 } from 'lucide-react'
 import { api } from '@/lib/api'
@@ -34,7 +33,6 @@ export function SettingsKeysPanel() {
   const [revealing, setRevealing] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [copiedCode, setCopiedCode] = useState(false)
 
   const save = useMutation({
     mutationFn: () => api.saveTickflowKey(keyInput.trim()),
@@ -89,27 +87,6 @@ export function SettingsKeysPanel() {
               </a>{' '}
               注册获取。API Key 存放为本地文件,不会上传任何第三方,请妥善保管。
             </p>
-            <p className="text-xs text-secondary leading-relaxed mb-4">
-              通过上方链接注册或填写邀请码{' '}
-              <span className="font-mono font-semibold text-accent inline-flex items-baseline gap-1">
-                V3KDKGXPEA
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard?.writeText('V3KDKGXPEA').then(() => {
-                      setCopiedCode(true)
-                      setTimeout(() => setCopiedCode(false), 1500)
-                    })
-                  }}
-                  className="text-muted hover:text-accent transition-colors duration-150 ease-smooth self-center"
-                  aria-label="复制邀请码"
-                  tabIndex={-1}
-                >
-                  {copiedCode ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                </button>
-              </span>
-              ,即可免费领取概念行业等扩展数据。
-            </p>
 
             {/* 当前状态 */}
             <div className="flex items-center justify-between mb-4">
@@ -131,7 +108,7 @@ export function SettingsKeysPanel() {
                   ) : (
                     <>
                       <AlertCircle className="h-4 w-4 text-muted shrink-0" />
-                      <span className="text-sm font-medium text-muted">未配置 · Free 数据</span>
+                      <span className="text-sm font-medium text-muted">未配置</span>
                     </>
                   )}
                 </div>
@@ -220,7 +197,7 @@ export function SettingsKeysPanel() {
               <div className="mt-3 text-xs text-bear flex items-center gap-1.5">
                 <CheckCircle2 className="h-3 w-3" />
                 保存成功 — 档位 {save.data.tier_label}
-                {save.data.mode === 'free' && '(免费档 · 历史日K)'}
+                {save.data.mode === 'free' && '(免费档 · 历史日K + 自选实时监控)'}
               </div>
             )}
           </Card>
@@ -341,7 +318,7 @@ export function SettingsKeysPanel() {
           <div className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6">
             <h3 className="text-sm font-medium text-foreground mb-2">清除 API Key</h3>
             <p className="text-xs text-secondary mb-5">
-              清除后将退回无档(仅历史日K),需要重新输入 Key 才能恢复。
+              清除后将退回 None 档(仅历史日K),需要重新输入 Key 才能恢复。
             </p>
             <div className="flex items-center justify-end gap-2">
               <button
@@ -407,18 +384,22 @@ function TierHelpPopover({ currentLabel }: { currentLabel: string }) {
                   return (
                     <div key={t} className="flex items-center gap-2">
                       <span className="h-1.5 w-1.5 rounded-full shrink-0" style={s.dotStyle} />
-                      <span className="font-mono font-bold w-12 shrink-0" style={s.labelTextStyle}>{t === 'none' ? '无' : t}</span>
+                      <span className="font-mono font-bold w-12 shrink-0" style={s.labelTextStyle}>{t === 'none' ? 'None' : t}</span>
                       <span className="text-secondary">{s.desc}</span>
                     </div>
                   )
                 })}
               </div>
 
+              <div className="mb-3 rounded-btn border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-[11px] font-medium text-warning">
+                高等档位包含较低档位的全部权益。
+              </div>
+
               {/* 检测说明 */}
               <div className="text-secondary space-y-1.5">
                 <div className="font-medium text-foreground">档位检测说明</div>
-                <p>保存 Key 后系统会在付费端点逐一试探数据能力:连单只日K都拿不到则判为「无」(不存 Key);有日K但无复权因子则判为「Free」;有复权因子再按代表能力判定 Starter/Pro/Expert。</p>
-                <p className="text-muted">无档与免费档运行时都走免费数据通道(仅历史日K),区别仅在于是否保存了 Key。付费档走付费端点,享有实时行情等完整能力。</p>
+                <p>保存 Key 后系统会在付费端点逐一试探数据能力:连单只日K都拿不到则判为「None」(不存 Key);有日K但无复权因子则判为「Free」;有复权因子再按代表能力判定 Starter/Pro/Expert。</p>
+                <p className="text-muted">None 档与 Free 档运行时都走免费数据通道(仅历史日K),区别仅在于是否保存了 Key。付费档走付费端点,享有实时行情等完整能力。</p>
               </div>
             </motion.div>
           </>

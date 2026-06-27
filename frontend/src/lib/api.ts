@@ -196,6 +196,7 @@ export interface WatchlistEntry {
   symbol: string
   added_at: string
   note?: string
+  name?: string | null
 }
 
 export interface Quote {
@@ -315,6 +316,18 @@ export interface OverviewMarket {
   active_leaders: MarketSnapshotRow[]
   concept_rank: { leading: OverviewDimensionRankItem[]; lagging: OverviewDimensionRankItem[] }
   industry_rank: { leading: OverviewDimensionRankItem[]; lagging: OverviewDimensionRankItem[] }
+}
+
+// ===== 大盘复盘 =====
+export interface AiReviewReport {
+  id: string
+  as_of: string
+  focus?: string
+  content: string
+  summary?: string
+  emotion_score?: number | null
+  emotion_label?: string
+  created_at: string
 }
 
 // ===== Strategy Engine =====
@@ -642,6 +655,20 @@ export interface Preferences {
   indices_nav_pinned: boolean
   minute_sync_enabled: boolean
   minute_sync_days: number
+  daily_data_provider?: string
+  adj_factor_provider?: string
+  minute_data_provider?: string
+  realtime_data_provider?: string
+  realtime_watchlist_symbols?: string[]
+  realtime_pull_stock?: boolean
+  realtime_pull_etf?: boolean
+  realtime_pull_index?: boolean
+  realtime_index_mode?: 'core' | 'all'
+  realtime_index_symbols?: string[]
+  pipeline_pull_a_share: boolean
+  pipeline_pull_etf: boolean
+  pipeline_pull_index: boolean
+  pipeline_index_symbols: string
   pipeline_schedule: { hour: number; minute: number }
   instruments_schedule: { hour: number; minute: number }
   enriched_batch_size: number
@@ -708,10 +735,29 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ minute_sync_enabled: enabled, minute_sync_days: days }),
     }),
+  updatePipelinePullTypes: (cfg: Partial<Pick<Preferences, 'pipeline_pull_a_share' | 'pipeline_pull_etf' | 'pipeline_pull_index'>>) =>
+    request<{
+      pipeline_pull_a_share: boolean
+      pipeline_pull_etf: boolean
+      pipeline_pull_index: boolean
+    }>('/api/settings/preferences/pipeline-pull-types', {
+      method: 'PUT',
+      body: JSON.stringify(cfg),
+    }),
+  updatePipelineIndexSymbols: (symbols: string) =>
+    request<{ pipeline_index_symbols: string }>('/api/settings/preferences/pipeline-index-symbols', {
+      method: 'PUT',
+      body: JSON.stringify({ symbols }),
+    }),
   updateRealtimeQuotes: (enabled: boolean) =>
-    request<{ realtime_quotes_enabled: boolean }>('/api/settings/preferences/realtime-quotes', {
+    request<{ realtime_quotes_enabled: boolean; realtime_allowed?: boolean; mode?: string; error?: string }>('/api/settings/preferences/realtime-quotes', {
       method: 'PUT',
       body: JSON.stringify({ realtime_quotes_enabled: enabled }),
+    }),
+  updateRealtimeQuoteScope: (cfg: Partial<Pick<Preferences, 'realtime_pull_stock' | 'realtime_pull_etf' | 'realtime_pull_index' | 'realtime_index_mode' | 'realtime_index_symbols'>>) =>
+    request<Partial<Preferences>>('/api/settings/preferences/realtime-quote-scope', {
+      method: 'PUT',
+      body: JSON.stringify(cfg),
     }),
   updateIndicesNavPinned: (pinned: boolean) =>
     request<{ indices_nav_pinned: boolean }>('/api/settings/preferences/indices-nav-pinned', {
@@ -722,9 +768,13 @@ export const api = {
     request<{
       enabled: boolean
       running: boolean
+      mode?: 'none' | 'watchlist' | 'full_market'
+      realtime_allowed?: boolean
       interval_s: number
       symbol_count: number
+      watchlist_symbol_count?: number
       index_symbol_count?: number
+      etf_symbol_count?: number
       quote_age_ms: number | null
       is_trading_hours: boolean
       last_fetch_ms: number | null
@@ -950,6 +1000,11 @@ export const api = {
     request<{ symbols: WatchlistEntry[] }>(
       `/api/watchlist/${encodeURIComponent(symbol)}`,
       { method: 'DELETE' },
+    ),
+  watchlistMoveToTop: (symbol: string) =>
+    request<{ symbols: WatchlistEntry[] }>(
+      `/api/watchlist/${encodeURIComponent(symbol)}/top`,
+      { method: 'POST' },
     ),
   watchlistClear: () =>
     request<{ removed: number }>('/api/watchlist', { method: 'DELETE' }),
@@ -1372,6 +1427,68 @@ export const api = {
     }
   },
 
+  // ===== 大盘复盘 =====
+  reviewReportsList: () =>
+    request<{ reports: AiReviewReport[] }>('/api/market-recap/reports'),
+
+  reviewReportSave: (r: {
+    as_of: string; focus?: string; content: string
+    summary?: string; emotion_score?: number | null; emotion_label?: string
+  }) =>
+    request<{ ok: boolean; report: AiReviewReport }>('/api/market-recap/reports', {
+      method: 'POST', body: JSON.stringify(r),
+    }),
+
+  reviewReportDelete: (reportId: string) =>
+    request<{ ok: boolean }>(`/api/market-recap/reports/${encodeURIComponent(reportId)}`, { method: 'DELETE' }),
+
+  /**
+   * AI 大盘复盘 — 流式调用(NDJSON,与个股/财务分析同协议)。
+   * meta 里带 as_of / emotion_score / emotion_label / summary,供前端先渲染信号灯。
+   */
+  async *reviewStream(asOf?: string, focus?: string): AsyncGenerator<{
+    type: 'meta' | 'delta' | 'error' | 'done'
+    as_of?: string
+    emotion_score?: number
+    emotion_label?: string
+    summary?: string
+    content?: string
+    message?: string
+  }> {
+    const res = await fetch('/api/market-recap/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ as_of: asOf ?? null, focus: focus ?? '' }),
+    })
+    if (!res.ok) {
+      let detail = ''
+      try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
+      const msg = detail || `${res.status} ${res.statusText}`
+      toast(msg, 'error')
+      throw new Error(msg)
+    }
+    if (!res.body) throw new Error('响应无 body')
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        const s = line.trim()
+        if (!s) continue
+        try { yield JSON.parse(s) } catch { /* ignore */ }
+      }
+    }
+    if (buf.trim()) {
+      try { yield JSON.parse(buf.trim()) } catch { /* ignore */ }
+    }
+  },
+
   // ===== Strategy Engine =====
   strategyList: () =>
     request<{ strategies: StrategyDetail[] }>('/api/strategies'),
@@ -1540,6 +1657,9 @@ export interface DataStatus {
   index_daily: TableStats | null
   index_enriched: TableStats | null
   index_instruments: InstrumentsStats | null
+  etf_daily: TableStats | null
+  etf_enriched: TableStats | null
+  etf_instruments: InstrumentsStats | null
   minute: TableStats | null
   adj_factor: TableStats | null
   instruments: InstrumentsStats | null
@@ -1555,6 +1675,14 @@ export interface DataStatus {
     index_enriched_size_mb?: number
     index_instruments_files?: number
     index_instruments_size_mb?: number
+    etf_daily_files?: number
+    etf_daily_size_mb?: number
+    etf_enriched_files?: number
+    etf_enriched_size_mb?: number
+    etf_instruments_files?: number
+    etf_instruments_size_mb?: number
+    etf_adj_factor_files?: number
+    etf_adj_factor_size_mb?: number
     minute_files: number
     minute_size_mb: number
     adj_factor_files: number

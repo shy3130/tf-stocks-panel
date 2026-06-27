@@ -11,8 +11,8 @@
 [![Deploy: Docker](https://img.shields.io/badge/Deploy-Docker-2496ed.svg)](./Dockerfile)
 [![GitHub stars](https://img.shields.io/github/stars/shy3130/tickflow-stock-panel?style=social)](https://github.com/shy3130/tickflow-stock-panel/stargazers)
 
-基于 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 数据 · 🚀 **开箱即用**(单容器 / Free 模式)
-能力驱动,适配 Free → Expert 全档位订阅 · 🔌 **自由接入第三方扩展数据**(例如 Tushare、自有量化项目数据)
+基于 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 数据 · 🚀 **开箱即用**(单容器 / None 模式)
+能力驱动,适配 None → Expert 全档位订阅 · 🔌 **自由接入第三方扩展数据**(例如 Tushare、自有量化项目数据)
 
 **[核心功能](#-核心功能)** · **[快速开始](#-快速开始)** · **[配置](#️-配置)** · **[路线图](#-路线图)**
 
@@ -28,14 +28,14 @@
 ## 🎯 项目定位
 
 让任何**个人散户 / 量化爱好者**,**零运维**地拥有一套**与自己订阅档位严格匹配**的 A 股分析、选股、监控工作台。  
-基于 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) Key **低成本**获取数据。**填写邀请码 `V3KDKGXPEA` 免费领取概念行业等扩展数据**。<br>
-**任意接入第三方数据**(Tushare 等),页面可视化自定义配置扩展数据表。
+基于 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) Key **零成本**获取数据，并使用策略定制+监控+回测功能。
+**内置ths概念、ths行业数据**。可接入第三方自有个性化扩展数据（人气、资金流向等）。
 
 **项目所需配置**:
 
 | 配置项 | 说明 | 是否必填 |
 | :--- | :--- | :--- |
-| **TickFlow API Key** | 数据源凭证,留空启用 None 模式，获取免费key后开启free模式可定制策略+回测 | 可选 |
+| **TickFlow API Key** | 数据源凭证,留空启用 None 模式；免费注册 Key 后进入 Free 模式，可使用历史日K与自选股实时监控 | 可选 |
 | **AI 大模型 API Key** | 用于 AI 生成策略、个股分析、财务分析等,任意 OpenAI 兼容接口,留空关闭 | 可选 |
 
 <table>
@@ -169,7 +169,8 @@
 
 ### 🧰 数据与扩展
 
-- **多源数据**:TickFlow 日 K / 分钟 K / 指数 / 财务(利润 / 资产负债 / 现金流)/ 自选行情
+- **多源数据**:TickFlow 日 K / 分钟 K / 指数 / 财务(利润 / 资产负债 / 现金流)/ 实时行情
+- **实时行情分档**:None 仅历史日K(当日数据通常盘后 1-2 小时可用);Free 可监控自选页前 5 个标的(最低 6 秒刷新);Starter+ 使用全市场实时行情
 - **🔌 第三方数据接入(重点)** —— TickFlow 之外的数据也能用:
   - 支持 **Tushare** 等第三方数据源,通过 **HTTP 定时拉取**自动入库
   - 支持 **CSV / Excel 上传** · **JSON 写入**,自动 schema 发现与符号归一
@@ -196,7 +197,7 @@
 ### 方式 A:Dev 模式(二次开发,最推荐)
 
 ```bash
-cp .env.example .env       # 填 TICKFLOW_API_KEY,留空则启用 Free 试用
+cp .env.example .env       # 填 TICKFLOW_API_KEY,留空则启用 None 模式
 ```
 
 **一键启动**(推荐,自动检查\下载依赖 / 释放端口 / 同时起前后端,Ctrl-C 一并关闭):
@@ -211,7 +212,7 @@ cp .env.example .env       # 填 TICKFLOW_API_KEY,留空则启用 Free 试用
 ### 方式 B:Docker(最省心,可部署)
 
 ```bash
-cp .env.example .env       # 按需填写 Key(留空即 Free 模式,可直接体验)
+cp .env.example .env       # 按需填写 Key(留空即 None 模式,可直接体验历史日K)
 docker compose up --build
 # 打开 http://localhost:3018
 ```
@@ -269,9 +270,9 @@ pnpm dev                   # http://localhost:3011
 
 1. 打开面板 → **设置 → 凭据与能力** → 点 **重新检测**,确认 Tier Label
 2. 点 **立即跑盘后管道** —— 拉日 K + 计算 enriched 表
-   - **Free 用户**:只同步内置 DEMO_SYMBOLS(浦发 / 招商 / 茅台等 10 只)
+   - **None / Free 用户**:历史日K走 free-api 通道;当日数据通常盘后 1-2 小时可用
    - **Starter+**:同步全 A 或可获取的 instruments 列表
-3. **自选**页:添加跟踪标的;点代码进 **K 线**页看蜡烛图 + 买卖点
+3. **自选**页:添加跟踪标的;Free 档实时行情会自动监控自选页前 5 个标的,可用「移到顶部」调整优先级;点代码进 **K 线**页看蜡烛图 + 买卖点
 4. **选股**页:点任一内置策略卡片即时扫描;或用自定义信号组合条件
 5. **回测**页:选策略 / 信号 + 时间区间 → 跑回测 → 看净值 / 夏普 / 交易明细(SSE 实时进度)
 6. **监控中心**页:配置监控规则(策略/个股信号/价格/市场异动),盘中 SSE 实时弹窗通知 + 持久化触发记录;或在个股详情页点「加监控」快速添加
@@ -284,13 +285,15 @@ pnpm dev                   # http://localhost:3011
 
 ### 数据源:TickFlow
 
-TickFlow 提供订阅制 A 股数据。**留空 `TICKFLOW_API_KEY` 即启用 Free 模式,无需注册即可体验**。
+TickFlow 提供订阅制 A 股数据。**留空 `TICKFLOW_API_KEY` 即启用 None 模式,可通过 free-api 使用历史日K;当日数据通常需盘后 1-2 小时可用**。免费注册并填写 Key 后进入 Free 模式，可开启自选股实时监控。
 
 ```ini
-TICKFLOW_API_KEY=              # 留空 = Free 模式;填入 Key = 按订阅档位解锁
+TICKFLOW_API_KEY=              # 留空 = None 模式;填入 Key = 按订阅档位解锁
 ```
 
-> 完整能力矩阵见 [tickflow.org/pricing](https://tickflow.org/pricing/)。系统启动时会自动探测你的真实能力集,UI 显示「≈ Pro」等友好标签。
+> 完整能力矩阵见 [tickflow.org/pricing](https://tickflow.org/pricing/)。系统启动时会自动探测你的真实能力集,UI 显示「Free / Starter / Pro / Expert」等友好标签。高等档位包含较低档位的全部权益。
+>
+> 当前面板使用的实时能力:Free = 自选页前 5 个标的实时监控(最低 6 秒刷新);Starter+ = 全市场实时行情;Pro = 分钟K + 盘口;Expert = WebSocket + 财务数据。
 
 ### AI(可选):策略生成
 

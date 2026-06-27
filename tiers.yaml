@@ -19,20 +19,21 @@
 #   none  = 无 key / 乱填 / 无效 key。运行时走 free-api 服务器(free 通道),
 #           仅历史日K(含批量),无实时行情。不存 API Key。
 #   free  = 免费有效 key(付费端点验证:有单只日K、无复权因子)。
-#           运行时同样走 free-api 服务器(key 被忽略),能力与 none 等价;
-#           存 key 仅作档位标记,便于将来 SDK 支持免费 key 时自动升级。
-#   两者运行时服务器相同(free-api),区别只在是否存 key。
+#           历史/盘后日K仍走 free-api 服务器；实时行情走付费服务器按标的接口。
+#           可用于自选股实时监控:10 次/分,每次最多 5 标的。
+#   none 与 free 的历史日K通道相同(free-api),区别在于 free 有付费服务器按标的实时权限。
 #   starter+ 才走付费端点 api.tickflow.org,有实时行情。
 
 none:
   # 无 key / 无效 key —— 走 free-api 服务器,仅历史日K(含批量),无实时行情
   kline.daily.by_symbol: { rpm: 60, batch: 1 }
-  kline.daily.batch:     { rpm: 60, batch: 50 }   # free-api 服务器批量日K
+  kline.daily.batch:     { rpm: 60, batch: 100 }   # free-api 服务器批量日K(接口限制 60 次/分, 每批最多 100 标的)
 
 free:
-  # 免费有效 key —— 运行时同样走 free-api 服务器,能力与 none 等价
+  # 免费有效 key —— 历史日K走 free-api；自选实时走付费服务器按标的接口
+  quote.by_symbol:       { rpm: 10, batch: 5 }
   kline.daily.by_symbol: { rpm: 60, batch: 1 }
-  kline.daily.batch:     { rpm: 60, batch: 50 }   # [补] 批量日K(此前缺失)
+  kline.daily.batch:     { rpm: 60, batch: 100 }   # free-api 服务器批量日K(同 none, 60 次/分, 每批最多 100 标的)
 
 starter:
   quote.by_symbol:       { rpm: 60, batch: 50 }

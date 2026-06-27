@@ -4,7 +4,7 @@ import { api, type EnrichedField } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
 const TABLE_TITLES: Record<string, string> = {
-  instruments: '标的维表',
+  instruments: '个股维表',
   daily: '日 K',
   adj_factor: '除权因子',
   enriched: 'Enriched',
@@ -12,6 +12,9 @@ const TABLE_TITLES: Record<string, string> = {
   index_instruments: '指数维表',
   index_daily: '指数日 K',
   index_enriched: '指数 Enriched',
+  etf_instruments: 'ETF 维表',
+  etf_daily: 'ETF 日 K',
+  etf_enriched: 'ETF Enriched',
 }
 
 function categorize(name: string): string {

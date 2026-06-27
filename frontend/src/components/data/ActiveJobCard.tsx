@@ -8,7 +8,7 @@ import type { PipelineJob } from '@/lib/api'
 export const STAGE_LABELS: Record<string, string> = {
   init: '初始化',
   resolve_universe: '解析标的池',
-  sync_instruments: '同步标的维表',
+  sync_instruments: '同步个股维表',
   sync_daily: '同步日 K',
   sync_adj: '同步除权因子',
   compute_enriched: '计算技术指标',

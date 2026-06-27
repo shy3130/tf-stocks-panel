@@ -63,6 +63,20 @@ def remove(symbol: str) -> list[dict]:
     return df.to_dicts()
 
 
+def move_to_top(symbol: str) -> list[dict]:
+    p = _path()
+    if not p.exists():
+        return []
+    df = pl.read_parquet(p)
+    if df.is_empty() or symbol not in df["symbol"].to_list():
+        return df.to_dicts()
+    target = df.filter(pl.col("symbol") == symbol)
+    rest = df.filter(pl.col("symbol") != symbol)
+    out = pl.concat([target, rest], how="diagonal_relaxed")
+    out.write_parquet(p)
+    return out.to_dicts()
+
+
 def clear() -> int:
     """清空自选列表。返回移除的数量。"""
     p = _path()

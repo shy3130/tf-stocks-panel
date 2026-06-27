@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus } from 'lucide-react'
+import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp } from 'lucide-react'
 import { api, type KlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
@@ -591,6 +591,18 @@ export function Watchlist() {
     },
   })
 
+  const moveToTop = useMutation({
+    mutationFn: (sym: string) => api.watchlistMoveToTop(sym),
+    onSuccess: (data) => {
+      qc.setQueryData(QK.watchlist, data)
+      qc.invalidateQueries({ queryKey: QK.watchlist })
+      qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
+      qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
+      qc.invalidateQueries({ queryKey: QK.preferences })
+      qc.invalidateQueries({ queryKey: QK.quoteStatus })
+    },
+  })
+
   const clearAll = useMutation({
     mutationFn: () => api.watchlistClear(),
     onSuccess: () => {
@@ -953,13 +965,25 @@ export function Watchlist() {
                               </button>
                             </div>
                           ) : (
-                            <button
-                              onClick={() => setConfirmRemove(r.symbol)}
-                              className="p-0.5 text-muted hover:text-danger transition-colors duration-150 ease-smooth"
-                              aria-label="移除"
-                            >
-                              <Minus className="h-3.5 w-3.5" />
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => setConfirmRemove(r.symbol)}
+                                className="p-0.5 text-muted hover:text-danger transition-colors duration-150 ease-smooth"
+                                aria-label="移除"
+                                title="移除"
+                              >
+                                <Minus className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={() => moveToTop.mutate(r.symbol)}
+                                disabled={moveToTop.isPending || allSymbols[0] === r.symbol}
+                                className="p-0.5 text-muted hover:text-accent transition-colors duration-150 ease-smooth disabled:opacity-30 disabled:hover:text-muted"
+                                aria-label="移到顶部"
+                                title="移到顶部"
+                              >
+                                <ChevronsUp className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           )}
                         </div>
                       </div>

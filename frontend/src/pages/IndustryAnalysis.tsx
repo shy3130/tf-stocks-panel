@@ -278,7 +278,11 @@ export function IndustryAnalysis() {
 
   const configsQuery = useQuery({ queryKey: QK.extData, queryFn: api.extDataList })
   const availableConfigs = configsQuery.data?.items ?? []
-  const activeConfigId = fieldConfig.configId || pickBestConfig(availableConfigs)
+  // 用户配置的 configId 可能已失效 (扩展数据被删除), 此时回退到自动选择,
+  // 避免用失效 ID 请求接口报错; 用户仍可点配置按钮重新选择。
+  const preferredConfigId = fieldConfig.configId || pickBestConfig(availableConfigs)
+  const preferredConfig = availableConfigs.find(c => c.id === preferredConfigId)
+  const activeConfigId = preferredConfig ? preferredConfigId : pickBestConfig(availableConfigs)
   const activeConfig = availableConfigs.find(c => c.id === activeConfigId)
 
   const rowsQuery = useQuery({

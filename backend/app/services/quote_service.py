@@ -43,6 +43,7 @@ class QuoteService:
         "expert": 1.0,
         "pro": 2.0,
         "starter": 3.0,
+        "free": 6.0,
     }
     DEFAULT_INTERVAL = 10.0
     MAX_INTERVAL = 60.0
@@ -68,6 +69,7 @@ class QuoteService:
         self._fetched_at: float = 0.0       # 拉取完成的 Unix 时间戳 (毫秒)
         self._symbol_count: int = 0
         self._index_symbol_count: int = 0
+        self._etf_symbol_count: int = 0
         self._index_quotes_cache: pl.DataFrame | None = None
 
     # ================================================================
@@ -102,11 +104,11 @@ class QuoteService:
     def enable(self) -> bool:
         """开启自动行情 (不立即启动线程，等下一个交易时段)。
 
-        none/free 档无实时行情权限,拒绝开启并返回 False;
-        starter+ 正常启动。返回值表示是否真正开启。
+        none 档无实时行情权限,拒绝开启并返回 False;
+        free 档开启自选股实时,starter+ 开启全市场实时。返回值表示是否真正开启。
         """
         if not self.is_realtime_allowed():
-            logger.warning("实时行情开启被拒:当前档位(none/free)无实时行情权限")
+            logger.warning("实时行情开启被拒:当前档位(none)无实时行情权限")
             return False
         self._enabled = True
         self._save_enabled(True)
@@ -126,14 +128,14 @@ class QuoteService:
     def boot_check(self) -> None:
         """启动时检查 preferences，若 enabled 则自动启动。
 
-        none/free 档无实时行情权限:即使 preferences 标记为 enabled,
+        none 档无实时行情权限:即使 preferences 标记为 enabled,
         也不启动,并同步 preferences 为关闭(避免 UI 误显示已开启)。
         """
         from app.services import preferences
         if not self.is_realtime_allowed():
             if preferences.get_realtime_quotes_enabled():
                 self._save_enabled(False)
-            logger.info("实时行情未启动:当前档位(none/free)无实时行情权限")
+            logger.info("实时行情未启动:当前档位(none)无实时行情权限")
             return
         if preferences.get_realtime_quotes_enabled():
             self.start()
@@ -199,13 +201,19 @@ class QuoteService:
         return tier_label().split()[0].split("+")[0].strip().lower()
 
     @classmethod
-    def is_realtime_allowed(cls) -> bool:
-        """当前档位是否允许使用实时行情。
+    def realtime_mode(cls) -> str:
+        """当前实时行情模式: none / watchlist / full_market。"""
+        tier = cls._current_tier()
+        if tier == "none":
+            return "none"
+        if tier == "free":
+            return "watchlist"
+        return "full_market"
 
-        none/free 档走 free-api 服务器,无实时行情权限 → 不允许;
-        starter+ 付费档走付费端点,有实时行情 → 允许。
-        """
-        return cls._current_tier() not in ("none", "free")
+    @classmethod
+    def is_realtime_allowed(cls) -> bool:
+        """当前档位是否允许使用实时行情。"""
+        return cls.realtime_mode() != "none"
 
     @classmethod
     def _tier_min_interval(cls) -> float:
@@ -262,13 +270,19 @@ class QuoteService:
 
     def status(self) -> dict:
         """返回行情服务状态。"""
+        from app.services import preferences
         age = (time.perf_counter() - self._fetch_time) * 1000 if self._fetch_time else -1
+        mode = self.realtime_mode()
         return {
             "enabled": self._enabled,
             "running": self._running,
+            "mode": mode,
+            "realtime_allowed": mode != "none",
+            "watchlist_symbol_count": len(preferences.get_realtime_watchlist_symbols()),
             "interval_s": self._interval,
             "symbol_count": self._symbol_count,
             "index_symbol_count": self._index_symbol_count,
+            "etf_symbol_count": self._etf_symbol_count,
             "quote_age_ms": round(age, 0) if age >= 0 else None,
             "is_trading_hours": self._is_trading_hours(),
             "last_fetch_ms": round(self._fetched_at, 0) if self._fetched_at else None,
@@ -299,17 +313,47 @@ class QuoteService:
                 waited += 0.5
 
     def _fetch_quotes(self) -> None:
-        """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。"""
-        from app.tickflow.client import get_client
+        """按当前档位拉取行情。"""
+        if self.realtime_mode() == "watchlist":
+            self._fetch_watchlist_quotes()
+            return
+        self._fetch_full_market_quotes()
 
-        tf = get_client()
+    def _fetch_full_market_quotes(self) -> None:
+        """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。"""
+        from app.tickflow.client import get_paid_realtime_client
+
+        tf = get_paid_realtime_client()
+        if tf is None:
+            logger.warning("实时行情拉取失败:未配置付费服务器 API Key")
+            return
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
 
         try:
+            from app.services import preferences
             all_index_symbols = set(self._repo.get_index_symbol_set()) if self._repo else set()
-            all_index_symbols.update(self.CORE_INDEX_SYMBOLS)
-            resp = tf.quotes.get_by_universes(universes=["CN_Equity_A", "CN_Index"])
+            core_index_symbols = set(preferences.get_realtime_index_symbols() or self.CORE_INDEX_SYMBOLS)
+            all_index_symbols.update(core_index_symbols)
+            all_etf_symbols = set()
+            if self._repo:
+                etf_inst = self._repo.get_etf_instruments()
+                if not etf_inst.is_empty() and "symbol" in etf_inst.columns:
+                    all_etf_symbols = set(etf_inst["symbol"].cast(pl.Utf8).to_list())
+
+            universes: list[str] = []
+            if preferences.get_realtime_pull_stock():
+                universes.append("CN_Equity_A")
+            if preferences.get_realtime_pull_etf() and all_etf_symbols:
+                universes.append("CN_ETF")
+            if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "all":
+                universes.append("CN_Index")
+
+            resp = []
+            if universes:
+                resp.extend(tf.quotes.get_by_universes(universes=universes) or [])
+            if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "core":
+                resp.extend(tf.quotes.get(symbols=sorted(core_index_symbols)) or [])
         except Exception as e:  # noqa: BLE001
             logger.warning("行情拉取失败: %s", e)
             return
@@ -349,7 +393,11 @@ class QuoteService:
             })
 
         index_records = [r for r in records if r.get("symbol") in all_index_symbols]
-        stock_records = [r for r in records if r.get("symbol") not in all_index_symbols]
+        etf_records = [r for r in records if r.get("symbol") in all_etf_symbols]
+        stock_records = [
+            r for r in records
+            if r.get("symbol") not in all_index_symbols and r.get("symbol") not in all_etf_symbols
+        ]
 
         fetch_ms = (time.perf_counter() - t0) * 1000
         fetched_at = time.time() * 1000
@@ -361,9 +409,10 @@ class QuoteService:
             self._fetched_at = fetched_at
             self._symbol_count = len(stock_records)
             self._index_symbol_count = len(index_records)
+            self._etf_symbol_count = len(etf_records)
             self._index_quotes_cache = self._build_index_quotes(index_records)
 
-        logger.info("行情刷新: %d 只股票, %d 只指数, 耗时 %.0fms", len(stock_records), len(index_records), fetch_ms)
+        logger.info("行情刷新: %d 只股票, %d 只ETF, %d 只指数, 耗时 %.0fms", len(stock_records), len(etf_records), len(index_records), fetch_ms)
 
         # ---- 写 kline_daily (不复权原始价格, 只有 OHLCV) ----
         daily_df = self._build_daily(stock_records)
@@ -373,17 +422,108 @@ class QuoteService:
             except Exception as e:  # noqa: BLE001
                 logger.warning("日K写盘失败: %s", e)
 
+        etf_daily_df = self._build_daily(etf_records)
+        if not etf_daily_df.is_empty() and self._repo:
+            try:
+                self._repo.flush_live_daily_asset("etf", etf_daily_df)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("ETF 日K写盘失败: %s", e)
+
         # ---- 构建 API 直接值的补充表 (不写 daily, 只用于 enriched 计算) ----
         quote_extra = self._build_quote_extra(stock_records)
+        etf_quote_extra = self._build_quote_extra(etf_records)
 
         # ---- 增量计算 enriched + 写盘 + 更新缓存 ----
         if not daily_df.is_empty() and self._repo:
-            self._flush_live_enriched(daily_df, quote_extra)
+            self._flush_live_enriched(daily_df, quote_extra, asset_type="stock")
+        if not etf_daily_df.is_empty() and self._repo:
+            self._flush_live_enriched(etf_daily_df, etf_quote_extra, asset_type="etf")
 
         # ---- 通知 SSE ----
         self._update_event.set()
 
         # ---- 策略监控 + 告警评估 ----
+        self._evaluate_monitors(daily_df, quote_extra)
+
+    def _fetch_watchlist_quotes(self) -> None:
+        """Free 档自选股实时: 只拉取最多 5 个 symbols。"""
+        from app.services import preferences
+        from app.tickflow.client import get_paid_realtime_client
+
+        symbols = preferences.get_realtime_watchlist_symbols()
+        if not symbols:
+            logger.info("自选实时未配置标的, 跳过行情拉取")
+            return
+
+        tf = get_paid_realtime_client()
+        if tf is None:
+            logger.warning("自选实时拉取失败:未配置付费服务器 API Key")
+            return
+
+        t0 = time.perf_counter()
+        now_ts = time.perf_counter()
+        try:
+            resp = tf.quotes.get(symbols=symbols) or []
+        except Exception as e:  # noqa: BLE001
+            logger.warning("自选实时拉取失败: %s", e)
+            return
+
+        if not resp:
+            logger.warning("自选实时行情数据为空")
+            return
+
+        records = []
+        for q in resp:
+            ext = q.get("ext") or {}
+            last_price = q.get("last_price")
+            prev_close = q.get("prev_close")
+            change_amount = ext.get("change_amount")
+            change_pct = ext.get("change_pct")
+            if change_amount is None and last_price is not None and prev_close is not None:
+                change_amount = float(last_price) - float(prev_close)
+            if change_pct is None and change_amount is not None and prev_close not in (None, 0):
+                change_pct = float(change_amount) / float(prev_close) * 100
+            records.append({
+                "symbol": q.get("symbol"),
+                "name": q.get("name") or ext.get("name"),
+                "last_price": last_price,
+                "prev_close": prev_close,
+                "open": q.get("open"),
+                "high": q.get("high"),
+                "low": q.get("low"),
+                "volume": q.get("volume"),
+                "amount": q.get("amount"),
+                "change_pct": change_pct,
+                "change_amount": change_amount,
+                "amplitude": ext.get("amplitude"),
+                "turnover_rate": ext.get("turnover_rate"),
+                "timestamp": q.get("timestamp"),
+                "session": q.get("session"),
+            })
+
+        fetch_ms = (time.perf_counter() - t0) * 1000
+        fetched_at = time.time() * 1000
+        with self._lock:
+            self._fetch_time = now_ts
+            self._fetch_ms = fetch_ms
+            self._fetched_at = fetched_at
+            self._symbol_count = len(records)
+            self._index_symbol_count = 0
+            self._etf_symbol_count = 0
+            self._index_quotes_cache = None
+
+        logger.info("自选实时刷新: %d 只股票, 耗时 %.0fms", len(records), fetch_ms)
+
+        daily_df = self._build_daily(records)
+        quote_extra = self._build_quote_extra(records)
+        if not daily_df.is_empty() and self._repo:
+            try:
+                self._repo.merge_live_daily_asset("stock", daily_df)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("自选实时日K写盘失败: %s", e)
+            self._flush_live_enriched(daily_df, quote_extra, asset_type="stock", merge=True)
+
+        self._update_event.set()
         self._evaluate_monitors(daily_df, quote_extra)
 
     # ================================================================
@@ -537,8 +677,8 @@ class QuoteService:
                                 "severity": ev.get("severity", "info"),
                             })
 
-            # 刷新策略结果缓存 (实时行情开启时，每轮行情更新后自动重算)
-            if self._enabled and self._app_state:
+            # Free 自选实时只刷新少量标的, 不写全市场策略缓存。
+            if self._enabled and self._app_state and self.realtime_mode() == "full_market":
                 self._refresh_strategy_cache(enriched_today, enriched_date)
 
             # 推入待推送队列 + 通知 SSE (含背压保护)
@@ -690,7 +830,7 @@ class QuoteService:
     # enriched 增量计算
     # ================================================================
 
-    def _flush_live_enriched(self, daily_df: pl.DataFrame, quote_extra: pl.DataFrame = None) -> None:
+    def _flush_live_enriched(self, daily_df: pl.DataFrame, quote_extra: pl.DataFrame = None, asset_type: str = "stock", merge: bool = False) -> None:
         """增量计算今天的 enriched: 用昨天的递推状态 + 今天 OHLCV → 只算今天 5500 行。
 
         quote_extra: API 直接提供的补充字段 (prev_close, change_pct 等),
@@ -701,11 +841,16 @@ class QuoteService:
             t0 = time.perf_counter()
 
             # ---- 尝试增量路径 ----
-            live_agg = self._repo.get_live_agg()
-            prev_enriched, prev_date = self._repo.get_enriched_latest()
+            live_agg = self._repo.get_live_agg() if asset_type == "stock" else pl.DataFrame()
+            prev_enriched, prev_date = (
+                self._repo.get_enriched_latest()
+                if asset_type == "stock"
+                else self._repo.get_enriched_latest_asset(asset_type)
+            )
 
             use_incremental = (
-                not live_agg.is_empty()
+                asset_type == "stock"
+                and not live_agg.is_empty()
                 and not prev_enriched.is_empty()
                 and prev_date is not None
             )
@@ -736,7 +881,8 @@ class QuoteService:
                             "ok" if not live_agg.is_empty() else "空", prev_date)
 
                 cutoff = today - timedelta(days=90)
-                daily_glob = str(self._repo.store.data_dir / "kline_daily" / "**" / "*.parquet")
+                table = "kline_etf_daily" if asset_type == "etf" else "kline_daily"
+                daily_glob = str(self._repo.store.data_dir / table / "**" / "*.parquet")
                 ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
                 hist_df = (
                     pl.scan_parquet(daily_glob)
@@ -753,14 +899,15 @@ class QuoteService:
                 full_df = pl.concat([hist_df, daily_ohlcv], how="diagonal_relaxed")
                 full_df = full_df.sort(["symbol", "date"])
 
-                factor_path = self._repo.store.data_dir / "adj_factor" / "all.parquet"
+                factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
+                factor_path = self._repo.store.data_dir / factor_dir / "all.parquet"
                 factors = pl.DataFrame()
                 if factor_path.exists():
                     try:
                         factors = pl.read_parquet(factor_path)
                     except Exception:
                         pass
-                instruments = self._repo.get_instruments()
+                instruments = self._repo.get_instruments() if asset_type == "stock" else None
 
                 enriched_full = compute_enriched(full_df, factors=factors, instruments=instruments)
                 enriched_today = enriched_full.filter(pl.col("date") == today)
@@ -769,7 +916,10 @@ class QuoteService:
                 return
 
             # ---- 写盘 + 更新缓存 ----
-            self._repo.flush_live_enriched(enriched_today)
+            if merge:
+                self._repo.merge_live_enriched_asset(asset_type, enriched_today)
+            else:
+                self._repo.flush_live_enriched_asset(asset_type, enriched_today)
 
             elapsed = time.perf_counter() - t0
             mode_label = "增量" if use_incremental else "全量"

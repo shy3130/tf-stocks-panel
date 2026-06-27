@@ -53,6 +53,29 @@ def get_realtime_quote_interval() -> float:
     return load().get("realtime_quote_interval", 10.0)
 
 
+def get_realtime_watchlist_symbols() -> list[str]:
+    """Free 档自选实时监控标的:直接取自选页前 5 个。"""
+    try:
+        from app.services import watchlist
+        rows = watchlist.list_symbols()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("load watchlist for realtime failed: %s", e)
+        return []
+    out: list[str] = []
+    for row in rows:
+        symbol = str((row or {}).get("symbol") or "").strip().upper()
+        if symbol and symbol not in out:
+            out.append(symbol)
+        if len(out) >= 5:
+            break
+    return out
+
+
+def set_realtime_watchlist_symbols(symbols: list[str]) -> list[str]:  # noqa: ARG001
+    """兼容旧接口: Free 实时标的现在由自选页前 5 个决定。"""
+    return get_realtime_watchlist_symbols()
+
+
 def set_realtime_quote_interval(interval: float) -> float:
     """保存行情轮询间隔（不在此做 min/max 校验，由调用方按档位限制）。"""
     current = load()
@@ -69,6 +92,83 @@ def get_minute_sync_enabled() -> bool:
 
 def get_minute_sync_days() -> int:
     return max(1, min(30, load().get("minute_sync_days", 5)))
+
+
+# ===== 数据源选择 (默认 TickFlow；第一阶段仅日K切换入口) =====
+
+_ALLOWED_DATA_PROVIDERS = {"tickflow"}
+
+
+def get_daily_data_provider() -> str:
+    provider = str(load().get("daily_data_provider", "tickflow") or "tickflow").lower()
+    return provider if provider in _ALLOWED_DATA_PROVIDERS else "tickflow"
+
+
+def get_adj_factor_provider() -> str:
+    provider = str(load().get("adj_factor_provider", "same_as_daily") or "same_as_daily").lower()
+    if provider == "same_as_daily":
+        return provider
+    return provider if provider in _ALLOWED_DATA_PROVIDERS else "same_as_daily"
+
+
+def get_minute_data_provider() -> str:
+    provider = str(load().get("minute_data_provider", "tickflow") or "tickflow").lower()
+    return provider if provider in _ALLOWED_DATA_PROVIDERS else "tickflow"
+
+
+def get_realtime_data_provider() -> str:
+    # 盘中实时现阶段仅支持 TickFlow。
+    return "tickflow"
+
+
+# ===== 盘后管道拉取内容开关 (A股 / ETF / 指数 独立控制) =====
+
+def get_pipeline_pull_a_share() -> bool:
+    """A 股日K固定拉取。"""
+    return True
+
+
+def get_pipeline_pull_etf() -> bool:
+    """是否拉取 ETF 日K。默认 False(标的多,首次较慢)。"""
+    return load().get("pipeline_pull_etf", False)
+
+
+def get_pipeline_pull_index() -> bool:
+    """是否拉取指数日K。默认 True。"""
+    return load().get("pipeline_pull_index", True)
+
+
+_PIPELINE_PULL_KEYS = ("pipeline_pull_etf", "pipeline_pull_index")
+
+
+def get_pipeline_pull_types() -> dict:
+    """返回三个拉取开关的当前值。"""
+    return {
+        "pipeline_pull_a_share": get_pipeline_pull_a_share(),
+        "pipeline_pull_etf": get_pipeline_pull_etf(),
+        "pipeline_pull_index": get_pipeline_pull_index(),
+    }
+
+
+def set_pipeline_pull_types(cfg: dict) -> dict:
+    """批量保存拉取开关。只接受白名单内的布尔字段。"""
+    updates = {
+        k: bool(v) for k, v in cfg.items()
+        if k in _PIPELINE_PULL_KEYS and v is not None
+    }
+    save(updates)
+    return get_pipeline_pull_types()
+
+
+def get_pipeline_index_symbols() -> str:
+    """指数自定义拉取代码(逗号/换行/空格分隔)。空串表示全量。"""
+    return str(load().get("pipeline_index_symbols", "") or "").strip()
+
+
+def set_pipeline_index_symbols(symbols: str) -> str:
+    """保存指数自定义代码,返回规范化后的字符串。"""
+    save({"pipeline_index_symbols": symbols})
+    return get_pipeline_index_symbols()
 
 
 def get_pipeline_schedule() -> dict:
@@ -176,6 +276,59 @@ SSE_REFRESH_PAGES_DEFAULT = {
 }
 
 SIDEBAR_INDEX_SYMBOLS_DEFAULT = ["000001.SH", "399001.SZ", "399006.SZ", "000680.SH"]
+
+
+# ===== 盘中实时行情范围 (独立于盘后管道范围) =====
+
+
+def get_realtime_pull_stock() -> bool:
+    return load().get("realtime_pull_stock", True)
+
+
+def get_realtime_pull_etf() -> bool:
+    # 老用户兼容: ETF 实时默认关闭，避免升级后请求量/写盘量突然增加。
+    return load().get("realtime_pull_etf", False)
+
+
+def get_realtime_pull_index() -> bool:
+    return load().get("realtime_pull_index", True)
+
+
+def get_realtime_index_mode() -> str:
+    mode = str(load().get("realtime_index_mode", "core") or "core").lower()
+    return mode if mode in {"core", "all"} else "core"
+
+
+def get_realtime_index_symbols() -> list[str]:
+    stored = load().get("realtime_index_symbols", SIDEBAR_INDEX_SYMBOLS_DEFAULT)
+    if isinstance(stored, str):
+        import re
+        stored = [s.strip() for s in re.split(r"[,\s]+", stored) if s.strip()]
+    return [str(s) for s in stored if str(s).strip()]
+
+
+def set_realtime_quote_scope(cfg: dict) -> dict:
+    updates = {}
+    for key in ("realtime_pull_stock", "realtime_pull_etf", "realtime_pull_index"):
+        if key in cfg and cfg[key] is not None:
+            updates[key] = bool(cfg[key])
+    if "realtime_index_mode" in cfg and cfg["realtime_index_mode"] in {"core", "all"}:
+        updates["realtime_index_mode"] = cfg["realtime_index_mode"]
+    if "realtime_index_symbols" in cfg and cfg["realtime_index_symbols"] is not None:
+        updates["realtime_index_symbols"] = cfg["realtime_index_symbols"]
+    if updates:
+        save(updates)
+    return get_realtime_quote_scope()
+
+
+def get_realtime_quote_scope() -> dict:
+    return {
+        "realtime_pull_stock": get_realtime_pull_stock(),
+        "realtime_pull_etf": get_realtime_pull_etf(),
+        "realtime_pull_index": get_realtime_pull_index(),
+        "realtime_index_mode": get_realtime_index_mode(),
+        "realtime_index_symbols": get_realtime_index_symbols(),
+    }
 
 
 def get_sse_refresh_pages() -> dict[str, bool]:

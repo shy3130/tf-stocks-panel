@@ -223,11 +223,47 @@ def sync_daily_by_quotes(repo: KlineRepository) -> int:
     return daily_df.height
 
 
+def _normalize_adj_factor(raw) -> pl.DataFrame:
+    """Normalize SDK ex_factors response to symbol/trade_date/ex_factor."""
+    if raw is None or len(raw) == 0:
+        return pl.DataFrame()
+    if isinstance(raw, dict):
+        rows: list[dict] = []
+        for sym, values in raw.items():
+            for item in values or []:
+                row = dict(item or {})
+                row.setdefault("symbol", sym)
+                rows.append(row)
+        df = pl.DataFrame(rows) if rows else pl.DataFrame()
+    elif isinstance(raw, pl.DataFrame):
+        df = raw
+    else:
+        df = pl.from_pandas(raw.reset_index() if hasattr(raw, "reset_index") else raw)
+    if df.is_empty():
+        return df
+    rename_map = {"timestamp": "trade_date", "date": "trade_date", "adj_factor": "ex_factor"}
+    df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
+    if "trade_date" in df.columns:
+        if df.schema["trade_date"] in {pl.Int64, pl.Int32, pl.UInt64, pl.UInt32, pl.Float64, pl.Float32}:
+            df = df.with_columns(
+                pl.from_epoch(pl.col("trade_date").cast(pl.Int64), time_unit="ms").dt.date().alias("trade_date")
+            )
+        else:
+            df = df.with_columns(pl.col("trade_date").cast(pl.Date, strict=False))
+    if "ex_factor" in df.columns:
+        df = df.with_columns(pl.col("ex_factor").cast(pl.Float64, strict=False))
+    cols = [c for c in ["symbol", "trade_date", "ex_factor"] if c in df.columns]
+    if len(cols) < 3:
+        return pl.DataFrame()
+    return df.select(cols).drop_nulls()
+
+
 def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                     capset: CapabilitySet,
                     start_time: datetime | None = None,
                     end_time: datetime | None = None,
-                    on_chunk_done: Callable[[int, int], None] | None = None) -> tuple[int, list[str]]:
+                    on_chunk_done: Callable[[int, int], None] | None = None,
+                    asset_type: str = "stock") -> tuple[int, list[str]]:
     """同步除权因子(Starter+)。SDK 接口:`tf.klines.ex_factors(symbols=...)`。
 
     支持增量: 传 start_time/end_time 只拉取该时间范围内的新除权事件。
@@ -257,10 +293,9 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
             time.sleep(interval)
         try:
             raw = tf.klines.ex_factors(chunk, **sdk_kwargs)
-            if raw is not None and len(raw) > 0:
-                all_dfs.append(pl.from_pandas(
-                    raw.reset_index() if hasattr(raw, "reset_index") else raw
-                ))
+            normalized = _normalize_adj_factor(raw)
+            if not normalized.is_empty():
+                all_dfs.append(normalized)
             logger.debug("adj_factor chunk %d/%d: %d symbols", i + 1, len(chunks), len(chunk))
         except Exception as e:  # noqa: BLE001
             logger.warning("adj_factor chunk %d failed: %s", i + 1, e)
@@ -276,7 +311,8 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
     # 提取受影响的 symbol 列表(合并前)
     affected = new_data["symbol"].unique().to_list()
 
-    out = repo.store.data_dir / "adj_factor" / "all.parquet"
+    factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
+    out = repo.store.data_dir / factor_dir / "all.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
 
     if out.exists():

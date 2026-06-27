@@ -70,6 +70,9 @@ export const QK = {
   monitorRules:         ['monitor-rules'] as const,
   monitorRuleOptions:   ['monitor-rule-options'] as const,
   alerts:               (source?: string) => ['alerts', source ?? ''] as const,
+
+  // AI 大盘复盘
+  reviewReports:        ['review-reports'] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====

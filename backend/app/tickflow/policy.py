@@ -31,9 +31,8 @@ _CAPSET_CACHE_FILE = "capabilities.json"
 # 旧缓存(无此字段或版本更低)会被判定过期,触发重新探测。
 # v2: 拆分 depth5 → depth5(单只) + depth5.batch(批量)
 # v3: 探测补全 quote.batch(此前 tiers.yaml 声明了但 _probe_real 漏探测)
-# v4: 5 档重构 —— 新增 none 档(无key/无效key),free 档重定义(走 free-api 服务器,
-#     仅历史日K)。判定改为复权因子分水岭:_classify_tier 接管档位判定。
-_CACHE_SCHEMA_VERSION = 4
+# v5: Free 档补充付费服务器 quote.by_symbol(10rpm/5标的),用于自选股实时监控。
+_CACHE_SCHEMA_VERSION = 5
 
 # 探测用最小代价请求:挑流通性最好的 1 只标的试
 _PROBE_SYMBOL = "600000.SH"  # 浦发银行,长期不会退市
@@ -278,7 +277,7 @@ def detect_capabilities(force: bool = False) -> CapabilitySet:
             _persist(capset, "None", log=probe_log, missing=[], extras=[], invalid_key=True)
             return capset
         if classified.is_free:
-            # 免费有效 key:能力按 free 档(= none 档能力,走 free-api 服务器)
+            # 免费有效 key:按 free 档能力持久化(日K free-api + 按标的实时)。
             capset = _tier_to_capset(tiers["free"])
             _persist(capset, "Free", log=probe_log + ["✓ 免费有效 key(运行时走 free-api 服务器)"], missing=[], extras=[])
             return capset
