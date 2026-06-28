@@ -11,19 +11,19 @@ $StateDir = Join-Path $Root '.desktop'
 $PidFile = Join-Path $StateDir 'dev.pid'
 $DevScript = Join-Path $Root 'dev.ps1'
 
-function Stop-ProcessTree($pid) {
-    if (-not $pid) { return }
+function Stop-ProcessTree($TargetProcessId) {
+    if (-not $TargetProcessId) { return }
     try {
-        [System.Diagnostics.Process]::GetProcessById([int]$pid) | Out-Null
-        $null = & cmd /c "taskkill /F /T /PID $pid 2>nul"
+        [System.Diagnostics.Process]::GetProcessById([int]$TargetProcessId) | Out-Null
+        $null = & cmd /c "taskkill /F /T /PID $TargetProcessId 2>nul"
     } catch {}
 }
 
 function Stop-PortListeners($port) {
     $listeners = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue
-    $pids = @($listeners.OwningProcess | Where-Object { $_ -gt 0 } | Sort-Object -Unique)
-    foreach ($pid in $pids) {
-        Stop-ProcessTree $pid
+    $processIds = @($listeners.OwningProcess | Where-Object { $_ -gt 0 } | Sort-Object -Unique)
+    foreach ($processId in $processIds) {
+        Stop-ProcessTree $processId
     }
 }
 

@@ -19,10 +19,10 @@ function Test-PortListening($port) {
     return [bool]$listeners
 }
 
-function Test-ProcessAlive($pid) {
-    if (-not $pid) { return $false }
+function Test-ProcessAlive($CandidateProcessId) {
+    if (-not $CandidateProcessId) { return $false }
     try {
-        [System.Diagnostics.Process]::GetProcessById([int]$pid) | Out-Null
+        [System.Diagnostics.Process]::GetProcessById([int]$CandidateProcessId) | Out-Null
         return $true
     } catch {
         return $false
@@ -56,5 +56,9 @@ $args = @(
 $proc = Start-Process -FilePath $ps -ArgumentList $args -WorkingDirectory $Root -WindowStyle Normal -PassThru
 $proc.Id | Out-File -FilePath $PidFile -Encoding ascii -Force
 
-Start-Sleep -Seconds 4
+for ($i = 0; $i -lt 60; $i++) {
+    if (Test-PortListening $FrontendPort) { break }
+    Start-Sleep -Milliseconds 500
+}
+
 Start-Process $FrontendUrl

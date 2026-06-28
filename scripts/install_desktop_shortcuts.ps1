@@ -48,12 +48,10 @@ function New-CmdShortcut($name, $cmdPath, $description) {
 function Install-CmdLauncher($name, $script, [bool]$isStart) {
     $target = Join-Path $Desktop "$name.cmd"
     if ($isStart) {
-        $devScript = Join-Path $Root 'dev.ps1'
         $content = @(
             '@echo off',
             ('cd /d "{0}"' -f $Root),
-            ('start "" "http://localhost:{0}"' -f $FrontendPort),
-            ('powershell.exe -NoProfile -ExecutionPolicy Bypass -NoExit -File "{0}" -BackendPort {1} -FrontendPort {2}' -f $devScript, $BackendPort, $FrontendPort)
+            ('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{0}" -BackendPort {1} -FrontendPort {2}' -f $script, $BackendPort, $FrontendPort)
         )
     } else {
         $content = @(
@@ -72,7 +70,7 @@ $stopScript = Join-Path $ScriptsDir 'stop_desktop.ps1'
 
 $startCmdLauncher = Install-CmdLauncher 'TickFlow Start' $startScript $true
 $stopCmdLauncher = Install-CmdLauncher 'TickFlow Stop' $stopScript $false
-$startShortcut = New-CmdShortcut 'TickFlow Launch' $startCmdLauncher 'Start TickFlow stock panel'
+$startShortcut = New-Shortcut 'TickFlow Launch' $startScript 'Start TickFlow stock panel' $false
 $stopShortcut = New-Shortcut 'TickFlow Stop' $stopScript 'Stop TickFlow stock panel' $false
 
 Write-Host "Created: $startShortcut" -ForegroundColor Green
