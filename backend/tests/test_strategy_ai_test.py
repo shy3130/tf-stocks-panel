@@ -3,7 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.api.strategy import _format_ai_test_response, _normalize_openai_base_url
-from app.services.stock_analyzer import _normalize_ai_base_url
+from app.services.ai_client import normalize_openai_base_url
+from app.services.financial_analyzer import _normalize_ai_base_url as normalize_financial_ai_base_url
+from app.services.market_recap import _normalize_ai_base_url as normalize_market_recap_ai_base_url
+from app.services.stock_analyzer import _normalize_ai_base_url as normalize_stock_ai_base_url
 
 
 def test_normalize_openai_base_url_adds_v1_for_root_gateway():
@@ -18,8 +21,14 @@ def test_normalize_openai_base_url_strips_chat_completions_path():
     assert _normalize_openai_base_url("http://ai.zedbox.cn:8080/v1/chat/completions") == "http://ai.zedbox.cn:8080/v1"
 
 
-def test_stock_analyzer_uses_same_openai_base_url_normalization():
-    assert _normalize_ai_base_url("http://ai.zedbox.cn:8080") == "http://ai.zedbox.cn:8080/v1"
+def test_shared_ai_base_url_normalization_adds_v1_for_root_gateway():
+    assert normalize_openai_base_url("http://ai.zedbox.cn:8080") == "http://ai.zedbox.cn:8080/v1"
+
+
+def test_all_ai_analyzers_use_same_base_url_normalization():
+    assert normalize_stock_ai_base_url("http://ai.zedbox.cn:8080") == "http://ai.zedbox.cn:8080/v1"
+    assert normalize_financial_ai_base_url("http://ai.zedbox.cn:8080") == "http://ai.zedbox.cn:8080/v1"
+    assert normalize_market_recap_ai_base_url("http://ai.zedbox.cn:8080") == "http://ai.zedbox.cn:8080/v1"
 
 
 def test_format_ai_test_response_handles_object_response():

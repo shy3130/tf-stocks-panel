@@ -28,9 +28,9 @@ logger = logging.getLogger(__name__)
 
 
 def _normalize_ai_base_url(url: str) -> str:
-    from app.api.strategy import _normalize_openai_base_url
+    from app.services.ai_client import normalize_openai_base_url
 
-    return _normalize_openai_base_url(url)
+    return normalize_openai_base_url(url)
 
 
 # 注入最近多少根日 K(技术面分析样本)

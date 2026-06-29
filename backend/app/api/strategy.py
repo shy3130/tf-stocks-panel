@@ -314,13 +314,9 @@ def get_strategy_source(strategy_id: str, request: Request):
 
 
 def _normalize_openai_base_url(url: str) -> str:
-    """Return the OpenAI-compatible base URL expected by the OpenAI SDK."""
-    base = (url or "").strip().rstrip("/")
-    if base.endswith("/chat/completions"):
-        base = base[: -len("/chat/completions")].rstrip("/")
-    if not base.endswith("/v1"):
-        base = f"{base}/v1"
-    return base
+    from app.services.ai_client import normalize_openai_base_url
+
+    return normalize_openai_base_url(url)
 
 
 def _format_ai_test_response(resp: Any) -> dict:

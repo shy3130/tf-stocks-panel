@@ -24,6 +24,12 @@ from app.services.market_overview_builder import build_market_overview
 logger = logging.getLogger(__name__)
 
 
+def _normalize_ai_base_url(url: str) -> str:
+    from app.services.ai_client import normalize_openai_base_url
+
+    return normalize_openai_base_url(url)
+
+
 # 指数简称映射:摘要里用简称(上/深/创/科),全称太长列表放不下。与前端 INDEX_SHORT 对齐。
 _INDEX_SHORT = {
     "上证指数": "上",
@@ -308,7 +314,7 @@ async def recap_market_stream(
         user_agent = secrets_store.get_ai_config("ai_user_agent", "") or settings.ai_user_agent
         client = AsyncOpenAI(
             api_key=ai_key,
-            base_url=secrets_store.get_ai_config("ai_base_url", "https://api.alysc.top"),
+            base_url=_normalize_ai_base_url(secrets_store.get_ai_config("ai_base_url", "https://api.alysc.top")),
             timeout=180.0,
             max_retries=2,
             default_headers={"User-Agent": user_agent},
